@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import { Book, ActivityLog } from '../../types';
@@ -20,33 +20,36 @@ import {
   UserCheck, 
   UserX, 
   Loader2, 
-  RefreshCw,
-  Sparkles,
-  ShieldCheck,
-  Edit3,
-  Clock,
-  X
+  Sparkles, 
+  Edit3, 
+  Clock, 
+  X,
+  Search,
+  CheckCircle2,
+  TrendingUp,
+  Bookmark,
+  LayoutGrid,
+  List
 } from 'lucide-react';
 
 export const AdminDashboard: React.FC = () => {
   const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<'books' | 'readers' | 'logs'>('books');
-
-  // Books state
   const [books, setBooks] = useState<Book[]>([]);
-  const [isLoadingBooks, setIsLoadingBooks] = useState(false);
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-
-  // Readers state
   const [readers, setReaders] = useState<any[]>([]);
-  const [isLoadingReaders, setIsLoadingReaders] = useState(false);
-  const [isCreateReaderOpen, setIsCreateReaderOpen] = useState(false);
-
-  // Logs state
   const [logs, setLogs] = useState<ActivityLog[]>([]);
+  const [isLoadingBooks, setIsLoadingBooks] = useState(true);
+  const [isLoadingReaders, setIsLoadingReaders] = useState(false);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
 
-  // Assign modal state
+  // Filters & Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'assigned' | 'unassigned' | 'completed'>('all');
+  const [viewLayout, setViewLayout] = useState<'grid' | 'table'>('grid');
+
+  // Modals state
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [isCreateReaderOpen, setIsCreateReaderOpen] = useState(false);
   const [assignModal, setAssignModal] = useState<{
     isOpen: boolean;
     bookId: string | null;
@@ -58,6 +61,7 @@ export const AdminDashboard: React.FC = () => {
     bookTitle: '',
   });
 
+  // Admin Edits Inspector Modal state
   const [editsModal, setEditsModal] = useState<{
     isOpen: boolean;
     bookId: string;
@@ -168,32 +172,77 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
+  // Filtered books
+  const filteredBooks = useMemo(() => {
+    return books.filter(b => {
+      const matchSearch = !searchQuery.trim() || 
+        b.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+        b.author.toLowerCase().includes(searchQuery.toLowerCase());
+      
+      const hasAssignments = b.assignments && b.assignments.length > 0;
+      const isCompleted = b.status === 'BETA_COMPLETE';
+
+      if (!matchSearch) return false;
+      if (statusFilter === 'assigned') return hasAssignments && !isCompleted;
+      if (statusFilter === 'unassigned') return !hasAssignments;
+      if (statusFilter === 'completed') return isCompleted;
+      return true;
+    });
+  }, [books, searchQuery, statusFilter]);
+
+  // Overall Statistics for Reading & Editorial Progress
+  const stats = useMemo(() => {
+    const totalBooks = books.length;
+    let totalAssignments = 0;
+    let completedAssignments = 0;
+    let totalProgressSum = 0;
+
+    books.forEach(b => {
+      if (b.assignments) {
+        totalAssignments += b.assignments.length;
+        b.assignments.forEach(a => {
+          totalProgressSum += a.overallPercentage || 0;
+          if (a.completedChaptersCount === b.totalChapters && b.totalChapters > 0) {
+            completedAssignments++;
+          }
+        });
+      }
+    });
+
+    const avgProgress = totalAssignments > 0 ? Math.round(totalProgressSum / totalAssignments) : 0;
+    const inBetaCount = books.filter(b => b.assignments && b.assignments.length > 0).length;
+
+    return { totalBooks, totalAssignments, avgProgress, inBetaCount, completedAssignments };
+  }, [books]);
+
   return (
-    <div className="min-h-screen bg-[#FAF8F5] flex flex-col">
-      {/* Top Navbar */}
-      <header className="bg-white border-b border-ink-100 sticky top-0 z-30 shadow-2xs">
+    <div className="min-h-screen bg-[#FBF9F5] text-ink-900 flex flex-col font-sans">
+      {/* Top Studio Navbar */}
+      <header className="bg-white/90 backdrop-blur-md border-b border-ink-100/80 sticky top-0 z-30 shadow-2xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-lily-100 text-lily-700 flex items-center justify-center font-bold font-serif">
+            <div className="w-10 h-10 rounded-2xl bg-purple-900 text-white flex items-center justify-center font-bold font-serif shadow-xs">
               LB
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-serif font-bold text-base text-ink-900">LilyBeta</span>
-                <span className="text-[10px] uppercase font-mono font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-800">Admin</span>
+                <span className="font-serif font-bold text-lg text-ink-950 tracking-tight">LilyBeta</span>
+                <span className="text-[10px] uppercase font-mono font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 border border-purple-200">
+                  Studio Admin
+                </span>
               </div>
-              <p className="text-[11px] text-ink-400">Cổng Quản trị & Phân công Beta Reader</p>
+              <p className="text-[11px] text-ink-400">Không gian điều phối & đọc duyệt bản thảo</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-4">
             <div className="hidden sm:flex flex-col text-right">
-              <span className="text-xs font-semibold text-ink-800">{user?.displayName}</span>
-              <span className="text-[10px] text-ink-400">@{user?.username}</span>
+              <span className="text-xs font-semibold text-ink-900">{user?.displayName}</span>
+              <span className="text-[10px] text-ink-400 font-mono">@{user?.username} · Ban Quản Trị</span>
             </div>
             <button
               onClick={() => logout()}
-              className="p-2 rounded-xl text-ink-500 hover:text-rose-600 hover:bg-rose-50 transition"
+              className="p-2 rounded-xl text-ink-400 hover:text-rose-600 hover:bg-rose-50 transition"
               title="Đăng xuất"
             >
               <LogOut className="w-4 h-4" />
@@ -202,103 +251,254 @@ export const AdminDashboard: React.FC = () => {
         </div>
       </header>
 
-      {/* Main Container */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full space-y-6">
-        {/* Navigation Tabs */}
-        <div className="flex items-center justify-between border-b border-ink-200/60 pb-2">
-          <div className="flex items-center gap-2">
+      {/* Main Studio Body */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-7 flex-1 w-full space-y-6">
+        
+        {/* Editorial Desk / Reading Stats Banner ("Cảm giác chăm chỉ hơn") */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          <div className="bg-white rounded-2xl p-4 border border-ink-100 shadow-2xs flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
+              <BookOpen className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-[11px] font-semibold text-ink-400 uppercase tracking-wider block">
+                Kho bản thảo
+              </span>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-xl font-bold font-serif text-ink-950">{stats.totalBooks}</span>
+                <span className="text-[11px] text-ink-500">tác phẩm</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl p-4 border border-ink-100 shadow-2xs flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-purple-50 text-purple-700 flex items-center justify-center shrink-0">
+              <Bookmark className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-[11px] font-semibold text-ink-400 uppercase tracking-wider block">
+                Đang đọc duyệt
+              </span>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-xl font-bold font-serif text-purple-900">{stats.inBetaCount}</span>
+                <span className="text-[11px] text-ink-500">truyện</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl p-4 border border-ink-100 shadow-2xs flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
+              <Users className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-[11px] font-semibold text-ink-400 uppercase tracking-wider block">
+                Lượt phân công
+              </span>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-xl font-bold font-serif text-blue-950">{stats.totalAssignments}</span>
+                <span className="text-[11px] text-ink-500">lượt đọc</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl p-4 border border-ink-100 shadow-2xs flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+              <TrendingUp className="w-5 h-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <span className="text-[11px] font-semibold text-ink-400 uppercase tracking-wider block">
+                Tiến độ trung bình
+              </span>
+              <div className="flex items-baseline justify-between gap-1">
+                <span className="text-xl font-bold font-serif text-emerald-950">{stats.avgProgress}%</span>
+                <span className="text-[10px] text-emerald-700 font-medium">
+                  {stats.completedAssignments} lượt xong
+                </span>
+              </div>
+              <div className="w-full h-1.5 bg-emerald-100 rounded-full mt-1 overflow-hidden">
+                <div 
+                  className="h-full bg-emerald-600 rounded-full transition-all duration-500"
+                  style={{ width: `${stats.avgProgress}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Primary Navigation Tabs */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 border-b border-ink-200/60 pb-3">
+          <div className="flex items-center gap-1.5 bg-black/5 p-1 rounded-2xl self-start">
             <button
               onClick={() => setActiveTab('books')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
                 activeTab === 'books'
-                  ? 'bg-lily-600 text-white shadow-xs'
-                  : 'text-ink-600 hover:text-ink-900 hover:bg-white'
+                  ? 'bg-white text-ink-950 shadow-xs'
+                  : 'text-ink-600 hover:text-ink-900'
               }`}
             >
-              <BookOpen className="w-4 h-4" />
-              <span>Tác phẩm ({books.length})</span>
+              <BookOpen className="w-4 h-4 text-purple-700" />
+              <span>Tủ bản thảo ({books.length})</span>
             </button>
 
             <button
               onClick={() => setActiveTab('readers')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
                 activeTab === 'readers'
-                  ? 'bg-lily-600 text-white shadow-xs'
-                  : 'text-ink-600 hover:text-ink-900 hover:bg-white'
+                  ? 'bg-white text-ink-950 shadow-xs'
+                  : 'text-ink-600 hover:text-ink-900'
               }`}
             >
-              <Users className="w-4 h-4" />
-              <span>Beta Readers ({readers.length})</span>
+              <Users className="w-4 h-4 text-blue-700" />
+              <span>Đội ngũ Beta Readers ({readers.length})</span>
             </button>
 
             <button
               onClick={() => setActiveTab('logs')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
                 activeTab === 'logs'
-                  ? 'bg-lily-600 text-white shadow-xs'
-                  : 'text-ink-600 hover:text-ink-900 hover:bg-white'
+                  ? 'bg-white text-ink-950 shadow-xs'
+                  : 'text-ink-600 hover:text-ink-900'
               }`}
             >
-              <History className="w-4 h-4" />
+              <History className="w-4 h-4 text-ink-500" />
               <span>Nhật ký</span>
             </button>
           </div>
 
-          <div>
+          <div className="flex items-center gap-2">
             {activeTab === 'books' && (
               <button
                 onClick={() => setIsUploadModalOpen(true)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-lily-600 hover:bg-lily-700 text-white text-xs font-semibold shadow-xs transition"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-purple-900 hover:bg-purple-950 text-white text-xs font-semibold shadow-xs transition transform hover:scale-[1.01] active:scale-[0.99]"
               >
                 <Plus className="w-4 h-4" />
-                <span>Thêm tác phẩm mới</span>
+                <span>Thêm bản thảo mới</span>
               </button>
             )}
 
             {activeTab === 'readers' && (
               <button
                 onClick={() => setIsCreateReaderOpen(true)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-lily-600 hover:bg-lily-700 text-white text-xs font-semibold shadow-xs transition"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-purple-900 hover:bg-purple-950 text-white text-xs font-semibold shadow-xs transition"
               >
                 <UserPlus className="w-4 h-4" />
-                <span>Cấp tài khoản mới</span>
+                <span>Cấp tài khoản Beta Reader</span>
               </button>
             )}
           </div>
         </div>
 
-        {/* Tab 1: Books */}
+        {/* TAB 1: BOOKS (TỦ BẢN THẢO) */}
         {activeTab === 'books' && (
           <div className="space-y-4">
-            {isLoadingBooks ? (
-              <div className="py-16 flex flex-col items-center justify-center gap-2 text-ink-500">
-                <Loader2 className="w-7 h-7 animate-spin text-lily-600" />
-                <p className="text-xs">Đang tải danh sách tác phẩm...</p>
+            {/* Search & Quick Filter Bar */}
+            <div className="bg-white rounded-2xl p-3 border border-ink-100 shadow-2xs flex flex-col md:flex-row items-center justify-between gap-3">
+              <div className="relative w-full md:w-80">
+                <Search className="w-4 h-4 text-ink-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Tìm theo tên tác phẩm, tác giả..."
+                  className="w-full pl-9 pr-3 py-1.5 rounded-xl border border-ink-200 text-xs bg-ink-50/50 text-ink-900 placeholder:text-ink-400 focus:outline-none focus:border-purple-600 focus:bg-white transition"
+                />
               </div>
-            ) : books.length === 0 ? (
-              <div className="bg-white rounded-3xl p-12 text-center border border-ink-100 space-y-4">
-                <div className="w-12 h-12 rounded-2xl bg-lily-50 text-lily-600 flex items-center justify-center mx-auto">
-                  <BookOpen className="w-6 h-6" />
+
+              {/* Status Filter Chips & View Mode */}
+              <div className="flex items-center justify-between w-full md:w-auto gap-3">
+                <div className="flex items-center gap-1 overflow-x-auto pb-1 md:pb-0">
+                  <button
+                    onClick={() => setStatusFilter('all')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                      statusFilter === 'all'
+                        ? 'bg-purple-100 text-purple-900'
+                        : 'text-ink-600 hover:bg-ink-100'
+                    }`}
+                  >
+                    Tất cả ({books.length})
+                  </button>
+                  <button
+                    onClick={() => setStatusFilter('assigned')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                      statusFilter === 'assigned'
+                        ? 'bg-purple-100 text-purple-900'
+                        : 'text-ink-600 hover:bg-ink-100'
+                    }`}
+                  >
+                    Đang duyệt ({stats.inBetaCount})
+                  </button>
+                  <button
+                    onClick={() => setStatusFilter('unassigned')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                      statusFilter === 'unassigned'
+                        ? 'bg-purple-100 text-purple-900'
+                        : 'text-ink-600 hover:bg-ink-100'
+                    }`}
+                  >
+                    Chưa giao ({stats.totalBooks - stats.inBetaCount})
+                  </button>
                 </div>
-                <h3 className="font-semibold text-base text-ink-900">Chưa có tác phẩm nào</h3>
-                <p className="text-xs text-ink-500 max-w-sm mx-auto">
-                  Hãy tải lên tệp TXT, EPUB hoặc DOCX để hệ thống tự động bóc tách chương và tạo truyện.
-                </p>
-                <button
-                  onClick={() => setIsUploadModalOpen(true)}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-lily-600 hover:bg-lily-700 text-white text-xs font-medium shadow-xs"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Tải lên truyện đầu tiên</span>
-                </button>
+
+                <div className="h-4 w-px bg-ink-200 hidden md:block" />
+
+                {/* View Layout Toggle */}
+                <div className="flex items-center bg-ink-100 p-0.5 rounded-xl text-ink-600">
+                  <button
+                    onClick={() => setViewLayout('grid')}
+                    className={`p-1.5 rounded-lg transition ${viewLayout === 'grid' ? 'bg-white text-ink-950 shadow-2xs' : 'hover:text-ink-900'}`}
+                    title="Kệ sách dạng lưới"
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setViewLayout('table')}
+                    className={`p-1.5 rounded-lg transition ${viewLayout === 'table' ? 'bg-white text-ink-950 shadow-2xs' : 'hover:text-ink-900'}`}
+                    title="Danh sách bảng gọn"
+                  >
+                    <List className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {books.map((b) => (
+            </div>
+
+            {/* Book Catalog */}
+            {isLoadingBooks ? (
+              <div className="py-24 flex flex-col items-center justify-center gap-3 text-ink-400">
+                <Loader2 className="w-8 h-8 animate-spin text-purple-800" />
+                <p className="text-xs font-medium">Đang tải tủ sách bản thảo...</p>
+              </div>
+            ) : filteredBooks.length === 0 ? (
+              <div className="bg-white rounded-3xl p-12 text-center border border-ink-100 space-y-4 shadow-2xs">
+                <div className="w-14 h-14 rounded-3xl bg-purple-50 text-purple-700 flex items-center justify-center mx-auto">
+                  <BookOpen className="w-7 h-7" />
+                </div>
+                <h3 className="font-serif font-bold text-base text-ink-900">
+                  {books.length === 0 ? 'Chưa có tác phẩm nào trong kho' : 'Không tìm thấy tác phẩm phù hợp'}
+                </h3>
+                <p className="text-xs text-ink-500 max-w-sm mx-auto leading-relaxed">
+                  {books.length === 0 
+                    ? 'Hãy tải lên tệp TXT, EPUB hoặc DOCX để hệ thống tự động trích xuất chương và phân công cho các Beta Readers.'
+                    : 'Thử thay đổi từ khóa tìm kiếm hoặc chuyển bộ lọc về "Tất cả".'}
+                </p>
+                {books.length === 0 && (
+                  <button
+                    onClick={() => setIsUploadModalOpen(true)}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-purple-900 hover:bg-purple-950 text-white text-xs font-semibold shadow-xs"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Tải lên truyện đầu tiên</span>
+                  </button>
+                )}
+              </div>
+            ) : viewLayout === 'grid' ? (
+              /* GRID VIEW: TIDY BOOK CARDS (NO AWKWARD GAPS!) */
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 items-start">
+                {filteredBooks.map((b) => (
                   <div
                     key={b.id}
-                    className="bg-white rounded-2xl p-4 sm:p-5 border border-ink-100/70 shadow-2xs hover:shadow-soft transition flex flex-col justify-between space-y-4"
+                    className="bg-white rounded-3xl p-5 border border-ink-100/80 shadow-2xs hover:shadow-soft transition-all duration-200 flex flex-col gap-4 group"
                   >
+                    {/* Top Book Header */}
                     <div className="flex gap-4 items-start">
                       <BookCover
                         title={b.title}
@@ -308,63 +508,108 @@ export const AdminDashboard: React.FC = () => {
                         format={b.fileFormat}
                         size="sm"
                       />
-                      <div className="flex-1 min-w-0 space-y-1">
+
+                      <div className="flex-1 min-w-0 space-y-1.5">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <BookStatusBadge status={b.status} />
                           <FormatBadge format={b.fileFormat} />
                         </div>
-                        <h4 className="font-serif font-bold text-sm text-ink-900 line-clamp-2 leading-snug">
+
+                        <h4 className="font-serif font-bold text-sm text-ink-950 line-clamp-2 leading-snug group-hover:text-purple-900 transition">
                           {b.title}
                         </h4>
-                        <p className="text-xs text-ink-500 line-clamp-1">{b.author}</p>
-                        <p className="text-[11px] text-ink-400 font-mono">
-                          {b.totalChapters} chương · {b.wordCount.toLocaleString('vi-VN')} chữ
+
+                        <p className="text-xs text-ink-500 line-clamp-1 italic font-serif">
+                          {b.author}
                         </p>
+
+                        <div className="text-[11px] text-ink-400 font-mono pt-0.5">
+                          <span>{b.totalChapters} chương</span>
+                          <span> · </span>
+                          <span>{b.wordCount.toLocaleString('vi-VN')} chữ</span>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Assignment status & progress */}
-                    <div className="pt-3 border-t border-ink-100/60 space-y-2 text-xs">
+                    {/* Reader Cohort & Progress Section */}
+                    <div className="pt-3 border-t border-ink-100 space-y-2">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-semibold text-ink-400 uppercase tracking-wider text-[10px]">
+                          Ban đọc duyệt ({b.assignments?.length || 0})
+                        </span>
+                        {b.assignments && b.assignments.length > 0 && (
+                          <span className="text-purple-800 font-mono text-[10px] font-semibold">
+                            {b.assignments.length} độc giả
+                          </span>
+                        )}
+                      </div>
+
                       {b.assignments && b.assignments.length > 0 ? (
-                        <div className="space-y-1.5">
-                          {b.assignments.map((a) => (
-                            <div key={a.id} className="p-2 rounded-xl bg-ink-50/70 border border-ink-100/50 flex flex-col gap-1">
-                              <div className="flex items-center justify-between">
-                                <span className="font-semibold text-lily-800 line-clamp-1">
-                                  {a.displayName} <span className="font-normal text-[10px] text-ink-400 font-mono">(@{a.username})</span>
-                                </span>
-                                <button
-                                  onClick={() => handleRevokeAssignment(b.id, a.betaUserId)}
-                                  className="p-1 text-ink-400 hover:text-rose-600 rounded-md"
-                                  title="Hủy phân công"
-                                >
-                                  <UserX className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
+                        <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                          {b.assignments.map((a) => {
+                            const isDone = a.completedChaptersCount === b.totalChapters && b.totalChapters > 0;
+                            const initials = (a.displayName || a.username || 'BR').slice(0, 2).toUpperCase();
 
-                              <div className="flex items-center justify-between text-[11px] text-ink-600">
-                                <span>Tiến độ: <strong className="text-purple-900 font-mono">{a.completedChaptersCount || 0}/{b.totalChapters}</strong> ({Math.round(a.overallPercentage || 0)}%)</span>
-                                <span className="text-[10px] font-mono text-ink-500">Đang ở chương {a.currentChapterIndex || 1}</span>
-                              </div>
+                            return (
+                              <div 
+                                key={a.id} 
+                                className="p-2.5 rounded-2xl bg-[#FAF8F5] border border-ink-100/70 hover:border-purple-200 transition flex flex-col gap-1.5"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <div className="w-5 h-5 rounded-full bg-purple-200 text-purple-900 text-[9px] font-bold flex items-center justify-center shrink-0">
+                                      {initials}
+                                    </div>
+                                    <span className="text-xs font-semibold text-ink-900 truncate">
+                                      {a.displayName}
+                                    </span>
+                                    <span className="text-[10px] text-ink-400 font-mono truncate hidden sm:inline">
+                                      (@{a.username})
+                                    </span>
+                                  </div>
 
-                              <div className="w-full h-1 bg-ink-200/60 rounded-full overflow-hidden">
-                                <div
-                                  className="h-full bg-purple-600 rounded-full"
-                                  style={{ width: `${Math.min(100, Math.max(0, a.overallPercentage || 0))}%` }}
-                                />
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    {isDone ? (
+                                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/80 px-1.5 py-0.5 rounded-md flex items-center gap-0.5">
+                                        <CheckCircle2 className="w-3 h-3" />
+                                        <span>Đã xong</span>
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] font-mono text-ink-500">
+                                        Chương {a.currentChapterIndex || 1}
+                                      </span>
+                                    )}
+
+                                    <button
+                                      onClick={() => handleRevokeAssignment(b.id, a.betaUserId)}
+                                      className="p-1 text-ink-300 hover:text-rose-600 rounded-md transition"
+                                      title="Hủy phân công người này"
+                                    >
+                                      <UserX className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Mini Progress bar */}
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between text-[10px] font-mono text-ink-500">
+                                    <span>{a.completedChaptersCount || 0}/{b.totalChapters} chương</span>
+                                    <span className="font-semibold text-purple-900">{Math.round(a.overallPercentage || 0)}%</span>
+                                  </div>
+                                  <div className="w-full h-1 bg-ink-200/50 rounded-full overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full transition-all duration-300 ${
+                                        isDone ? 'bg-emerald-600' : 'bg-purple-600'
+                                      }`}
+                                      style={{ width: `${Math.min(100, Math.max(0, a.overallPercentage || 0))}%` }}
+                                    />
+                                  </div>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       ) : (
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] text-amber-700 font-medium bg-amber-50 px-2 py-0.5 rounded">
-                            Chưa phân công
-                          </span>
-                        </div>
-                      )}
-
-                      <div className="flex items-center justify-between pt-1">
                         <button
                           onClick={() => setAssignModal({
                             isOpen: true,
@@ -372,65 +617,166 @@ export const AdminDashboard: React.FC = () => {
                             bookTitle: b.title,
                             currentAssignedUserId: b.assignedTo?.id,
                           })}
-                          className="px-2.5 py-1 text-[11px] font-semibold bg-lily-50 text-lily-700 hover:bg-lily-100 rounded-lg transition"
+                          className="w-full p-3 rounded-2xl border-2 border-dashed border-ink-200 hover:border-purple-300 bg-white hover:bg-purple-50/30 text-ink-400 hover:text-purple-800 text-xs font-medium text-center transition flex items-center justify-center gap-1.5"
                         >
-                          {b.assignments && b.assignments.length > 0 ? '+ Giao thêm người' : 'Giao truyện'}
+                          <Users className="w-3.5 h-3.5" />
+                          <span>Chưa có ai duyệt · Nhấn để phân công</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Card Action Bar */}
+                    <div className="pt-2 border-t border-ink-100 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => setAssignModal({
+                            isOpen: true,
+                            bookId: b.id,
+                            bookTitle: b.title,
+                            currentAssignedUserId: b.assignedTo?.id,
+                          })}
+                          className="px-3 py-1.5 text-xs font-semibold bg-purple-50 text-purple-900 hover:bg-purple-100 rounded-xl transition"
+                        >
+                          {b.assignments && b.assignments.length > 0 ? '+ Giao thêm' : 'Giao truyện'}
                         </button>
 
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => handleOpenEditsModal(b.id, b.title)}
-                            className="px-2.5 py-1 text-[11px] font-semibold bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg transition flex items-center gap-1"
-                            title="Xem tất cả chỉnh sửa của Beta Readers"
-                          >
-                            <Edit3 className="w-3 h-3" />
-                            <span>Xem Edits</span>
-                          </button>
-                          <button
-                            onClick={() => handleDeleteBook(b.id, b.title)}
-                            className="p-1 text-ink-400 hover:text-rose-600 rounded-md"
-                            title="Xóa truyện"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                        <button
+                          onClick={() => handleOpenEditsModal(b.id, b.title)}
+                          className="px-3 py-1.5 text-xs font-semibold bg-ink-100 text-ink-800 hover:bg-ink-200 rounded-xl transition flex items-center gap-1"
+                          title="Xem tất cả đề xuất sửa đổi của Beta Readers"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-purple-700" />
+                          <span>Xem Edits</span>
+                        </button>
                       </div>
+
+                      <button
+                        onClick={() => handleDeleteBook(b.id, b.title)}
+                        className="p-2 text-ink-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition"
+                        title="Xóa bản thảo"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
                 ))}
+              </div>
+            ) : (
+              /* TABLE VIEW: ULTRA-TIDY COMPACT LIST */
+              <div className="bg-white rounded-3xl border border-ink-100 shadow-2xs overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-[#FAF8F5] border-b border-ink-100 text-ink-400 uppercase font-mono text-[10px] tracking-wider">
+                      <tr>
+                        <th className="py-3 px-4">Tác phẩm</th>
+                        <th className="py-3 px-4">Định dạng</th>
+                        <th className="py-3 px-4">Chương / Chữ</th>
+                        <th className="py-3 px-4">Beta Readers</th>
+                        <th className="py-3 px-4">Trạng thái</th>
+                        <th className="py-3 px-4 text-right">Thao tác</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-ink-100/60 font-sans">
+                      {filteredBooks.map((b) => (
+                        <tr key={b.id} className="hover:bg-purple-50/20 transition">
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-3">
+                              <BookCover
+                                title={b.title}
+                                author={b.author}
+                                coverUrl={b.coverUrl}
+                                coverColor={b.coverColor}
+                                format={b.fileFormat}
+                                size="xs"
+                              />
+                              <div>
+                                <h5 className="font-serif font-bold text-xs text-ink-950 line-clamp-1">{b.title}</h5>
+                                <p className="text-[11px] text-ink-500 italic">{b.author}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4">
+                            <FormatBadge format={b.fileFormat} />
+                          </td>
+                          <td className="py-3 px-4 font-mono text-ink-600">
+                            {b.totalChapters} ch. · {b.wordCount.toLocaleString('vi-VN')}
+                          </td>
+                          <td className="py-3 px-4">
+                            {b.assignments && b.assignments.length > 0 ? (
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {b.assignments.map(a => (
+                                  <span key={a.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-50 text-purple-900 text-[10px] font-semibold border border-purple-100">
+                                    <span>{a.displayName}</span>
+                                    <span className="font-mono text-purple-600">({Math.round(a.overallPercentage || 0)}%)</span>
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-ink-400 italic text-[11px]">Chưa giao</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4">
+                            <BookStatusBadge status={b.status} />
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => handleOpenEditsModal(b.id, b.title)}
+                                className="px-2.5 py-1 rounded-lg bg-purple-50 text-purple-800 hover:bg-purple-100 text-[11px] font-semibold transition"
+                              >
+                                Edits
+                              </button>
+                              <button
+                                onClick={() => setAssignModal({ isOpen: true, bookId: b.id, bookTitle: b.title })}
+                                className="px-2.5 py-1 rounded-lg bg-ink-100 hover:bg-ink-200 text-ink-700 text-[11px] font-semibold transition"
+                              >
+                                Giao
+                              </button>
+                              <button
+                                onClick={() => handleDeleteBook(b.id, b.title)}
+                                className="p-1 text-ink-400 hover:text-rose-600 rounded-md transition"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </div>
         )}
 
-        {/* Tab 2: Beta Readers */}
+        {/* TAB 2: BETA READERS */}
         {activeTab === 'readers' && (
           <div className="bg-white rounded-3xl border border-ink-100 shadow-2xs overflow-hidden">
             <div className="px-6 py-4 border-b border-ink-100 flex items-center justify-between">
               <div>
-                <h3 className="font-semibold text-base text-ink-900">Danh sách tài khoản Beta Reader</h3>
-                <p className="text-xs text-ink-500">Quản lý và cấp quyền truy cập tác phẩm</p>
+                <h3 className="font-serif font-bold text-base text-ink-950">Danh sách tài khoản Beta Reader</h3>
+                <p className="text-xs text-ink-500">Quản lý các độc giả duyệt bản thảo độc quyền</p>
               </div>
               <button
                 onClick={loadReaders}
-                className="p-2 text-ink-400 hover:text-ink-700 rounded-xl"
-                title="Làm mới"
+                className="px-3 py-1.5 rounded-xl border border-ink-200 text-ink-600 hover:bg-ink-50 text-xs font-semibold"
               >
-                <RefreshCw className="w-4 h-4" />
+                Làm mới
               </button>
             </div>
 
             {isLoadingReaders ? (
-              <div className="py-16 flex flex-col items-center justify-center gap-2 text-ink-500">
-                <Loader2 className="w-7 h-7 animate-spin text-lily-600" />
-                <p className="text-xs">Đang tải danh sách người dùng...</p>
+              <div className="py-20 flex flex-col items-center justify-center gap-2 text-ink-400">
+                <Loader2 className="w-6 h-6 animate-spin text-purple-700" />
+                <span className="text-xs">Đang tải danh sách tài khoản...</span>
               </div>
             ) : readers.length === 0 ? (
-              <div className="p-12 text-center text-xs text-ink-500 space-y-3">
-                <p>Chưa có tài khoản Beta Reader nào trong hệ thống.</p>
+              <div className="p-12 text-center text-ink-500 text-xs space-y-3">
+                <p>Chưa có tài khoản Beta Reader nào được cấp.</p>
                 <button
                   onClick={() => setIsCreateReaderOpen(true)}
-                  className="px-4 py-2 bg-lily-600 text-white rounded-xl text-xs font-medium"
+                  className="px-4 py-2 rounded-xl bg-purple-900 text-white text-xs font-semibold"
                 >
                   Cấp tài khoản đầu tiên
                 </button>
@@ -438,33 +784,45 @@ export const AdminDashboard: React.FC = () => {
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-ink-50/50 text-ink-600 uppercase tracking-wider font-semibold border-b border-ink-100">
+                  <thead className="bg-[#FAF8F5] border-b border-ink-100 text-ink-400 uppercase font-mono text-[10px] tracking-wider">
                     <tr>
-                      <th className="px-6 py-3.5">Người dùng</th>
-                      <th className="px-6 py-3.5">Tên đăng nhập</th>
-                      <th className="px-6 py-3.5">Truyện phụ trách</th>
-                      <th className="px-6 py-3.5">Trạng thái</th>
-                      <th className="px-6 py-3.5 text-right">Thao tác</th>
+                      <th className="py-3 px-6">Tên hiển thị & Username</th>
+                      <th className="py-3 px-6">Vai trò</th>
+                      <th className="py-3 px-6">Trạng thái</th>
+                      <th className="py-3 px-6">Ngày cấp</th>
+                      <th className="py-3 px-6 text-right">Thao tác</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-ink-100">
+                  <tbody className="divide-y divide-ink-100/60">
                     {readers.map((r) => (
-                      <tr key={r.id} className="hover:bg-ink-50/40">
-                        <td className="px-6 py-4 font-semibold text-ink-900">{r.displayName}</td>
-                        <td className="px-6 py-4 font-mono text-ink-600">@{r.username}</td>
-                        <td className="px-6 py-4 text-ink-700">
-                          <span className="font-semibold text-lily-700">{r.assignedBooksCount || 0}</span> truyện
+                      <tr key={r.id} className="hover:bg-purple-50/10 transition">
+                        <td className="py-3 px-6">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-7 h-7 rounded-full bg-purple-100 text-purple-900 font-bold flex items-center justify-center text-[10px]">
+                              {(r.displayName || r.username).slice(0, 2).toUpperCase()}
+                            </div>
+                            <div>
+                              <span className="font-semibold text-ink-950 block">{r.displayName}</span>
+                              <span className="text-[11px] font-mono text-ink-400">@{r.username}</span>
+                            </div>
+                          </div>
                         </td>
-                        <td className="px-6 py-4">
-                          <ActiveBadge isActive={r.isActive} />
+                        <td className="py-3 px-6">
+                          <RoleBadge role={r.role} />
                         </td>
-                        <td className="px-6 py-4 text-right">
+                        <td className="py-3 px-6">
+                          <ActiveBadge isActive={Boolean(r.isActive)} />
+                        </td>
+                        <td className="py-3 px-6 font-mono text-ink-400 text-[11px]">
+                          {new Date(r.createdAt).toLocaleDateString('vi-VN')}
+                        </td>
+                        <td className="py-3 px-6 text-right">
                           <button
-                            onClick={() => handleToggleReaderStatus(r.id, r.isActive, r.username)}
-                            className={`px-3 py-1 rounded-lg font-medium transition ${
+                            onClick={() => handleToggleReaderStatus(r.id, Boolean(r.isActive), r.username)}
+                            className={`px-3 py-1 rounded-xl text-xs font-semibold transition ${
                               r.isActive
-                                ? 'text-rose-700 bg-rose-50 hover:bg-rose-100'
-                                : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
+                                ? 'text-rose-600 hover:bg-rose-50 border border-rose-200'
+                                : 'text-emerald-700 hover:bg-emerald-50 border border-emerald-200'
                             }`}
                           >
                             {r.isActive ? 'Khóa tài khoản' : 'Mở khóa'}
@@ -479,39 +837,41 @@ export const AdminDashboard: React.FC = () => {
           </div>
         )}
 
-        {/* Tab 3: Activity Logs */}
+        {/* TAB 3: AUDIT LOGS */}
         {activeTab === 'logs' && (
           <div className="bg-white rounded-3xl border border-ink-100 shadow-2xs overflow-hidden">
             <div className="px-6 py-4 border-b border-ink-100 flex items-center justify-between">
               <div>
-                <h3 className="font-semibold text-base text-ink-900">Nhật ký hoạt động (Audit Logs)</h3>
-                <p className="text-xs text-ink-500">Lưu vết các thao tác bảo mật và tiến trình đọc duyệt</p>
+                <h3 className="font-serif font-bold text-base text-ink-950">Nhật ký hoạt động bảo mật</h3>
+                <p className="text-xs text-ink-500">Toàn bộ thao tác phân công, đăng nhập và chỉnh sửa được lưu vết</p>
               </div>
-              <button onClick={loadLogs} className="p-2 text-ink-400 hover:text-ink-700 rounded-xl">
-                <RefreshCw className="w-4 h-4" />
+              <button
+                onClick={loadLogs}
+                className="px-3 py-1.5 rounded-xl border border-ink-200 text-ink-600 hover:bg-ink-50 text-xs font-semibold"
+              >
+                Làm mới
               </button>
             </div>
 
             {isLoadingLogs ? (
-              <div className="py-16 flex flex-col items-center justify-center gap-2 text-ink-500">
-                <Loader2 className="w-7 h-7 animate-spin text-lily-600" />
-                <p className="text-xs">Đang tải nhật ký...</p>
+              <div className="py-20 flex flex-col items-center justify-center gap-2 text-ink-400">
+                <Loader2 className="w-6 h-6 animate-spin text-purple-700" />
+                <span className="text-xs">Đang tải nhật ký...</span>
               </div>
             ) : logs.length === 0 ? (
-              <div className="p-12 text-center text-xs text-ink-500">Chưa có nhật ký ghi nhận.</div>
+              <div className="p-12 text-center text-ink-500 text-xs">
+                Chưa có nhật ký hoạt động nào.
+              </div>
             ) : (
-              <div className="divide-y divide-ink-100 text-xs">
+              <div className="divide-y divide-ink-100/60 max-h-[500px] overflow-y-auto">
                 {logs.map((log) => (
-                  <div key={log.id} className="p-4 sm:px-6 flex items-start justify-between gap-4 hover:bg-ink-50/40">
-                    <div className="space-y-1">
+                  <div key={log.id} className="p-4 flex items-center justify-between gap-4 text-xs hover:bg-ink-50/50 transition">
+                    <div className="space-y-0.5">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded bg-ink-100 text-ink-800">
+                        <span className="font-bold text-purple-900 font-mono text-[11px] bg-purple-50 px-2 py-0.5 rounded-md border border-purple-100">
                           {log.action}
                         </span>
-                        <span className="font-medium text-ink-900">{log.userDisplayName || log.userName || log.userId}</span>
-                        {log.bookTitle && (
-                          <span className="text-ink-500">· {log.bookTitle}</span>
-                        )}
+                        <span className="font-semibold text-ink-800">{log.userDisplayName || log.userName || 'System'}</span>
                       </div>
                       {log.details && (
                         <p className="text-ink-500 font-mono text-[11px] line-clamp-1">{log.details}</p>
@@ -562,7 +922,7 @@ export const AdminDashboard: React.FC = () => {
           >
             <div className="flex items-center justify-between border-b border-ink-100 pb-3">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-purple-50 text-purple-700 flex items-center justify-center">
+                <div className="w-9 h-9 rounded-2xl bg-purple-50 text-purple-800 flex items-center justify-center">
                   <Edit3 className="w-4 h-4" />
                 </div>
                 <div>
@@ -585,7 +945,7 @@ export const AdminDashboard: React.FC = () => {
             <div className="flex-1 overflow-y-auto space-y-3 pr-1 py-1">
               {editsModal.isLoading ? (
                 <div className="py-16 flex flex-col items-center justify-center gap-2 text-ink-400">
-                  <Loader2 className="w-6 h-6 animate-spin text-purple-700" />
+                  <Loader2 className="w-6 h-6 animate-spin text-purple-800" />
                   <span className="text-xs">Đang tải danh sách chỉnh sửa...</span>
                 </div>
               ) : editsModal.edits.length === 0 ? (
@@ -594,7 +954,7 @@ export const AdminDashboard: React.FC = () => {
                 </div>
               ) : (
                 editsModal.edits.map((edit) => (
-                  <div key={edit.id} className="p-4 rounded-2xl border border-ink-100 bg-ink-50/40 space-y-2.5 text-xs">
+                  <div key={edit.id} className="p-4 rounded-2xl border border-ink-100 bg-[#FAF8F5] space-y-2.5 text-xs">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-ink-900">
@@ -605,7 +965,7 @@ export const AdminDashboard: React.FC = () => {
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-900 border border-purple-200">
                           {ERROR_TYPE_LABELS[edit.errorType] || edit.errorType}
                         </span>
                         <span className="text-[10px] text-ink-400 font-mono">
@@ -626,12 +986,12 @@ export const AdminDashboard: React.FC = () => {
                     </div>
 
                     {edit.reason && (
-                      <p className="text-[11px] text-ink-600 italic">
-                        Lý do: {edit.reason}
+                      <p className="text-[11px] text-ink-600 italic font-serif">
+                        Lý do: "{edit.reason}"
                       </p>
                     )}
 
-                    <div className="flex items-center justify-between text-[10px] text-ink-400 pt-1 border-t border-ink-100/60">
+                    <div className="flex items-center justify-between text-[10px] text-ink-400 pt-1 border-t border-ink-100/60 font-mono">
                       <span>Trạng thái: <strong className={edit.status === 'ACTIVE' ? 'text-emerald-600' : 'text-rose-600'}>{edit.status}</strong></span>
                       <span>{new Date(edit.updatedAt).toLocaleString('vi-VN')}</span>
                     </div>

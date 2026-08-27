@@ -3,7 +3,7 @@ import { api, ApiError } from '../../services/api';
 import { Book, Chapter } from '../../types';
 import { BookCover } from '../../components/common/BookCover';
 import { FormatBadge } from '../../components/common/Badges';
-import { ArrowLeft, BookOpen, CheckCircle2, Clock, ShieldAlert, Loader2, Play } from 'lucide-react';
+import { ArrowLeft, BookOpen, CheckCircle2, Clock, ShieldAlert, Loader2, Play, Bookmark } from 'lucide-react';
 
 interface BetaBookDetailProps {
   bookId: string;
@@ -48,10 +48,10 @@ export const BetaBookDetail: React.FC<BetaBookDetailProps> = ({ bookId, onBack, 
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#FAF8F5]">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 className="w-8 h-8 text-purple-600 animate-spin" />
-          <p className="text-sm text-ink-600">Đang tải bản thảo...</p>
+      <div className="min-h-screen flex items-center justify-center bg-[#FBF9F5]">
+        <div className="flex flex-col items-center gap-3 text-ink-400">
+          <Loader2 className="w-8 h-8 text-purple-900 animate-spin" />
+          <p className="text-xs font-medium">Đang tải bản thảo...</p>
         </div>
       </div>
     );
@@ -60,12 +60,12 @@ export const BetaBookDetail: React.FC<BetaBookDetailProps> = ({ bookId, onBack, 
   // IDOR Barrier Screen
   if (forbiddenError) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-[#FAF8F5]">
+      <div className="min-h-screen flex items-center justify-center p-4 bg-[#FBF9F5]">
         <div className="max-w-md w-full bg-white rounded-3xl p-8 border border-rose-200 text-center space-y-4 shadow-sm">
-          <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
+          <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
             <ShieldAlert className="w-6 h-6" />
           </div>
-          <h2 className="text-xl font-bold text-ink-900">Truy cập bị từ chối</h2>
+          <h2 className="text-xl font-bold font-serif text-ink-950">Truy cập bị từ chối</h2>
           <p className="text-xs text-ink-600 leading-relaxed">
             Hệ thống từ chối yêu cầu. Bạn không có phân công đối với tác phẩm này. Dữ liệu chương được bảo mật tuyệt đối theo quyền truy cập.
           </p>
@@ -84,9 +84,9 @@ export const BetaBookDetail: React.FC<BetaBookDetailProps> = ({ bookId, onBack, 
 
   if (errorMessage || !book) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-[#FAF8F5]">
+      <div className="min-h-screen flex items-center justify-center p-4 bg-[#FBF9F5]">
         <div className="max-w-md w-full bg-white rounded-3xl p-8 border border-ink-200 text-center space-y-4">
-          <h2 className="text-lg font-bold text-ink-900">Đã xảy ra lỗi</h2>
+          <h2 className="text-lg font-bold font-serif text-ink-950">Đã xảy ra lỗi</h2>
           <p className="text-xs text-ink-600">{errorMessage || 'Không tìm thấy tác phẩm.'}</p>
           <button
             onClick={onBack}
@@ -100,25 +100,26 @@ export const BetaBookDetail: React.FC<BetaBookDetailProps> = ({ bookId, onBack, 
   }
 
   const currentChapterIndex = book.currentChapter || 1;
+  const isAllDone = book.completedChaptersCount === book.totalChapters && book.totalChapters > 0;
 
   return (
-    <div className="min-h-screen bg-[#FAF8F5] flex flex-col">
+    <div className="min-h-screen bg-[#FBF9F5] text-ink-900 flex flex-col font-sans">
       {/* Top Bar */}
-      <header className="bg-white border-b border-ink-100 sticky top-0 z-30">
+      <header className="bg-white/90 backdrop-blur-md border-b border-ink-100/80 sticky top-0 z-30 shadow-2xs">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
           <button
             onClick={onBack}
-            className="flex items-center gap-1.5 text-ink-600 hover:text-ink-900 text-xs font-semibold py-1.5 px-2.5 rounded-lg hover:bg-ink-100/60 transition"
+            className="flex items-center gap-1.5 text-ink-600 hover:text-ink-950 text-xs font-semibold py-1.5 px-2.5 rounded-xl hover:bg-ink-100 transition"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span>Quay lại</span>
+            <span>Tủ sách của bạn</span>
           </button>
-          <span className="text-xs font-mono text-ink-400">LilyBeta Secure Reader</span>
+          <span className="text-[11px] font-mono text-ink-400">LilyBeta Reading Desk</span>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8 flex-1 w-full space-y-8">
+      <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8 flex-1 w-full space-y-7">
         {/* Book Header Card */}
         <div className="bg-white rounded-3xl p-6 sm:p-8 border border-ink-100 shadow-2xs flex flex-col sm:flex-row gap-6 items-start">
           <BookCover
@@ -127,48 +128,47 @@ export const BetaBookDetail: React.FC<BetaBookDetailProps> = ({ bookId, onBack, 
             coverUrl={book.coverUrl}
             coverColor={book.coverColor}
             format={book.fileFormat}
-            size="lg"
+            size="md"
           />
 
-          <div className="flex-1 space-y-4">
+          <div className="flex-1 min-w-0 space-y-4">
             <div className="space-y-1.5">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <FormatBadge format={book.fileFormat} />
                 <span className="text-xs text-ink-400 font-mono">
                   {book.totalChapters} chương · {book.wordCount.toLocaleString('vi-VN')} chữ
                 </span>
               </div>
-              <h1 className="font-serif font-bold text-2xl sm:text-3xl text-ink-900 leading-snug">
+              <h1 className="font-serif font-bold text-2xl sm:text-3xl text-ink-950 leading-snug">
                 {book.title}
               </h1>
-              <p className="text-sm text-ink-600 italic">{book.author}</p>
+              <p className="text-sm text-ink-600 italic font-serif">{book.author}</p>
             </div>
 
             {/* Progress status */}
-            <div className="p-4 rounded-2xl bg-ink-50/60 border border-ink-100/60 space-y-2.5">
+            <div className="p-4 rounded-2xl bg-[#FAF8F5] border border-ink-100 space-y-2.5">
               <div className="flex justify-between text-xs text-ink-600">
-                <span>Tiến độ Beta: <strong className="text-purple-900">{book.completedChaptersCount || 0}/{book.totalChapters} chương</strong></span>
-                <span className="font-mono font-semibold text-purple-700">
+                <span>Tiến độ đọc duyệt: <strong className="text-purple-900 font-mono">{book.completedChaptersCount || 0}/{book.totalChapters} chương</strong></span>
+                <span className="font-mono font-bold text-purple-900">
                   {Math.round(book.progressPercent || 0)}%
                 </span>
               </div>
-              <div className="w-full h-2 bg-ink-200/70 rounded-full overflow-hidden">
+              <div className="w-full h-2 bg-ink-200/60 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-purple-600 rounded-full transition-all duration-300"
+                  className={`h-full rounded-full transition-all duration-300 ${isAllDone ? 'bg-emerald-600' : 'bg-purple-900'}`}
                   style={{ width: `${Math.min(100, Math.max(0, book.progressPercent || 0))}%` }}
                 />
               </div>
-              <div className="flex items-center gap-3 text-[11px] text-ink-500 pt-1">
-                <span>Hoàn thành: <strong className="text-emerald-700 font-mono">{book.completedChaptersCount || 0}</strong></span>
-                <span>·</span>
-                <span>Còn lại: <strong className="text-ink-700 font-mono">{Math.max(0, book.totalChapters - (book.completedChaptersCount || 0))}</strong> chương</span>
+              <div className="flex items-center justify-between text-[11px] text-ink-400 pt-1 font-mono">
+                <span>Đã xong: <strong className="text-emerald-700">{book.completedChaptersCount || 0} chương</strong></span>
+                <span>Còn lại: <strong className="text-ink-700">{Math.max(0, book.totalChapters - (book.completedChaptersCount || 0))} chương</strong></span>
               </div>
             </div>
 
             {/* Action button */}
             <button
               onClick={() => onOpenChapter(currentChapterIndex)}
-              className="inline-flex items-center gap-2 px-6 py-3 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-sm font-semibold shadow-xs transition"
+              className="inline-flex items-center gap-2 px-6 py-3 bg-purple-900 hover:bg-purple-950 text-white rounded-2xl text-xs font-semibold shadow-xs transition transform hover:scale-[1.01] active:scale-[0.99]"
             >
               <Play className="w-4 h-4 fill-current" />
               <span>{book.progressPercent && book.progressPercent > 0 ? `Đọc tiếp Chương ${currentChapterIndex}` : 'Bắt đầu đọc từ Chương 1'}</span>
@@ -178,12 +178,15 @@ export const BetaBookDetail: React.FC<BetaBookDetailProps> = ({ bookId, onBack, 
 
         {/* Chapter List (Table of Contents) */}
         <div className="bg-white rounded-3xl border border-ink-100 shadow-2xs overflow-hidden">
-          <div className="px-6 py-4 border-b border-ink-100 flex items-center justify-between">
-            <h3 className="font-semibold text-base text-ink-900">Mục lục ({chapters.length} chương)</h3>
-            <span className="text-xs text-ink-400">Chọn chương để đọc</span>
+          <div className="px-6 py-4 border-b border-ink-100 flex items-center justify-between bg-[#FAF8F5]">
+            <div className="flex items-center gap-2">
+              <BookOpen className="w-4 h-4 text-purple-900" />
+              <h3 className="font-serif font-bold text-base text-ink-950">Mục lục tác phẩm ({chapters.length} chương)</h3>
+            </div>
+            <span className="text-xs text-ink-400 font-mono">Bấm vào chương để bắt đầu đọc</span>
           </div>
 
-          <div className="divide-y divide-ink-100 text-sm">
+          <div className="divide-y divide-ink-100/70 text-xs">
             {chapters.map((ch) => {
               const isCurrent = ch.index === currentChapterIndex;
               const isCompleted = ch.status === 'COMPLETED';
@@ -193,30 +196,31 @@ export const BetaBookDetail: React.FC<BetaBookDetailProps> = ({ bookId, onBack, 
                   key={ch.index}
                   onClick={() => onOpenChapter(ch.index)}
                   className={`p-4 sm:px-6 flex items-center justify-between cursor-pointer transition ${
-                    isCurrent ? 'bg-purple-50/70' : 'hover:bg-ink-50/60'
+                    isCurrent ? 'bg-purple-50/70' : 'hover:bg-[#FAF8F5]'
                   }`}
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="font-mono text-xs text-ink-400 w-8 shrink-0">
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    <span className="font-mono text-xs text-ink-400 w-7 shrink-0">
                       #{ch.index}
                     </span>
-                    <span className={`font-medium line-clamp-1 ${isCurrent ? 'text-purple-800 font-semibold' : 'text-ink-800'}`}>
+                    <span className={`line-clamp-1 ${isCurrent ? 'text-purple-950 font-bold font-serif' : 'text-ink-800 font-medium'}`}>
                       {ch.title}
                     </span>
                     {isCompleted && (
-                      <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 shrink-0">
+                      <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 shrink-0 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" />
                         Đã beta
                       </span>
                     )}
                     {isCurrent && !isCompleted && (
-                      <span className="text-[10px] uppercase font-bold font-mono px-2 py-0.5 rounded bg-purple-200/70 text-purple-900 shrink-0">
+                      <span className="text-[10px] uppercase font-bold font-mono px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 shrink-0">
                         Đang đọc
                       </span>
                     )}
                   </div>
 
-                  <div className="flex items-center gap-4 text-xs text-ink-400 shrink-0 ml-4">
-                    <span className="font-mono">{ch.wordCount.toLocaleString('vi-VN')} chữ</span>
+                  <div className="flex items-center gap-4 text-ink-400 shrink-0 ml-4 font-mono text-[11px]">
+                    <span>{ch.wordCount.toLocaleString('vi-VN')} chữ</span>
                     {isCompleted ? (
                       <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                     ) : (
