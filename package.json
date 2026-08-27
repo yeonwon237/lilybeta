@@ -11,7 +11,11 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "db:migrate": "tsx server/migrations/runner.ts",
-    "test:security": "tsx tests/idor-security.test.ts"
+    "test:security": "tsx tests/idor-security.test.ts",
+    "test:renderer": "tsx tests/working-version-renderer.test.ts",
+    "test:migrations": "tsx tests/migrations.test.ts",
+    "test:drafts": "tsx tests/draft-store.test.ts",
+    "test": "npm run test:security && npm run test:renderer && npm run test:migrations && npm run test:drafts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

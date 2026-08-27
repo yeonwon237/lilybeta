@@ -1,11 +1,6 @@
 -- LilyBeta Migration 003: Inline Edits, Multi-Revision History & Structured Beta Data (Phase 3)
 
--- 0. Clean up any preliminary prototype tables if existing
-DROP TABLE IF EXISTS beta_edit_reviews;
-DROP TABLE IF EXISTS beta_edit_revisions;
-DROP TABLE IF EXISTS beta_revisions;
-DROP TABLE IF EXISTS beta_edits;
-DROP TABLE IF EXISTS beta_notes;
+-- Safe non-destructive creation of Phase 3 editing tables
 
 -- 1. Beta Edits table (Paragraph-anchored proposed edits by Beta Readers)
 CREATE TABLE IF NOT EXISTS beta_edits (

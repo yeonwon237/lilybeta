@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { CheckCircle2, AlertTriangle, Edit3, MessageSquare, Check } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, Edit3, MessageSquare, Check, Trash2, Loader2 } from 'lucide-react';
 import { useReader } from '../../context/ReaderContext';
+import { DraftStore, EditDraft } from '../../beta-edit/draftStore';
 
 export const ConfirmCompleteModal: React.FC = () => {
   const { 
@@ -12,31 +13,43 @@ export const ConfirmCompleteModal: React.FC = () => {
     markCurrentChapterCompleted,
     edits,
     notes,
-    isAutosaving
+    isAutosaving,
+    isEditSaving,
+    editSaveError,
+    currentUserId,
   } = useReader();
 
-  const [hasUnsavedDraft, setHasUnsavedDraft] = useState<boolean>(false);
+  const [chapterDrafts, setChapterDrafts] = useState<EditDraft[]>([]);
+  const [isDiscarding, setIsDiscarding] = useState<boolean>(false);
+
+  const refreshDrafts = () => {
+    if (!book) return;
+    const list = DraftStore.listDraftsForChapter(currentUserId, book.id, currentChapterIndex);
+    setChapterDrafts(list);
+  };
 
   useEffect(() => {
     if (!isConfirmCompleteOpen || !book) return;
-
-    // Check if any unsaved edit drafts exist for this chapter
-    let unsavedFound = false;
-    try {
-      const prefix = `lilybeta_draft_`;
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith(prefix) && key.includes(`_${book.id}_${currentChapterIndex}_`)) {
-          unsavedFound = true;
-          break;
-        }
-      }
-    } catch {}
-
-    setHasUnsavedDraft(unsavedFound);
-  }, [isConfirmCompleteOpen, book, currentChapterIndex]);
+    refreshDrafts();
+  }, [isConfirmCompleteOpen, book, currentChapterIndex, currentUserId]);
 
   if (!isConfirmCompleteOpen) return null;
+
+  const hasUnsavedDraft = chapterDrafts.length > 0;
+  const canComplete = !hasUnsavedDraft && !isEditSaving;
+
+  const handleDiscardAllDrafts = () => {
+    if (!book) return;
+    if (window.confirm(`Bạn có chắc muốn xóa bỏ tất cả ${chapterDrafts.length} bản nháp chưa lưu trong chương này để hoàn tất beta?`)) {
+      setIsDiscarding(true);
+      try {
+        DraftStore.discardAllDraftsForChapter(currentUserId, book.id, currentChapterIndex);
+        refreshDrafts();
+      } finally {
+        setIsDiscarding(false);
+      }
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-150">
@@ -71,16 +84,36 @@ export const ConfirmCompleteModal: React.FC = () => {
 
           {/* Unsaved draft warning */}
           {hasUnsavedDraft ? (
-            <div className="mt-3 p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-[11px] flex items-start gap-2 text-left">
-              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold">Chưa thể hoàn tất:</p>
-                <p>Vẫn còn bản nháp chỉnh sửa chưa được lưu trong chương này. Hãy hoàn tất hoặc hủy bản nháp trước khi beta xong.</p>
+            <div className="mt-3 p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs space-y-2 text-left">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">Chưa thể hoàn tất chương:</p>
+                  <p className="text-[11px] text-rose-700 leading-relaxed">
+                    Còn <strong>{chapterDrafts.length} bản nháp chưa lưu</strong> trong chương này. Hãy lưu hoặc bỏ bản nháp trước khi hoàn tất.
+                  </p>
+                </div>
               </div>
+
+              <button
+                type="button"
+                onClick={handleDiscardAllDrafts}
+                disabled={isDiscarding}
+                className="w-full py-1.5 px-3 bg-white hover:bg-rose-100/80 border border-rose-300 text-rose-800 font-semibold rounded-xl text-[11px] transition flex items-center justify-center gap-1.5 shadow-2xs"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                <span>Bỏ {chapterDrafts.length} bản nháp để hoàn tất</span>
+              </button>
             </div>
-          ) : isAutosaving ? (
-            <div className="mt-3 p-2.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px]">
-              Hệ thống đang đồng bộ tiến độ đọc... Vui lòng đợi trong giây lát.
+          ) : isEditSaving ? (
+            <div className="mt-3 p-3 rounded-2xl bg-purple-50 border border-purple-200 text-purple-800 text-xs flex items-center justify-center gap-2 font-medium">
+              <Loader2 className="w-4 h-4 animate-spin text-purple-700" />
+              <span>Đang lưu chỉnh sửa lên cloud...</span>
+            </div>
+          ) : editSaveError ? (
+            <div className="mt-3 p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2 text-left">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <span>Lỗi lưu chỉnh sửa: {editSaveError}. Vui lòng thử lại.</span>
             </div>
           ) : (
             <div className="mt-2 text-[11px] text-emerald-700 bg-emerald-50/70 border border-emerald-200/60 p-2.5 rounded-2xl flex items-center justify-center gap-1 font-medium">
@@ -100,11 +133,12 @@ export const ConfirmCompleteModal: React.FC = () => {
           </button>
           <button
             type="button"
-            disabled={hasUnsavedDraft || isAutosaving}
+            disabled={!canComplete}
             onClick={() => markCurrentChapterCompleted()}
-            className="flex-1 py-2.5 px-4 rounded-xl text-xs font-semibold bg-purple-700 hover:bg-purple-800 disabled:opacity-40 disabled:hover:bg-purple-700 text-white shadow-xs transition"
+            className="flex-1 py-2.5 px-4 rounded-xl text-xs font-semibold bg-purple-900 hover:bg-purple-950 disabled:opacity-40 disabled:hover:bg-purple-900 text-white shadow-xs transition flex items-center justify-center gap-1.5"
           >
-            Xác nhận xong
+            <Check className="w-3.5 h-3.5" />
+            <span>Xác nhận xong</span>
           </button>
         </div>
       </div>

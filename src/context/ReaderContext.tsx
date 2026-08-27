@@ -74,6 +74,9 @@ interface ReaderContextType {
   isConfirmCompleteOpen: boolean;
   isAutosaving: boolean;
   lastSavedText: string | null;
+  isEditSaving: boolean;
+  editSaveError: string | null;
+  currentUserId: string;
 
   // Phase 3: Edits & Notes
   edits: BetaEdit[];
@@ -172,9 +175,11 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState<boolean>(false);
   const [isNoteModalOpen, setIsNoteModalOpen] = useState<boolean>(false);
 
-  // Autosave state
   const [isAutosaving, setIsAutosaving] = useState<boolean>(false);
   const [lastSavedText, setLastSavedText] = useState<string | null>(null);
+  const [isEditSaving, setIsEditSaving] = useState<boolean>(false);
+  const [editSaveError, setEditSaveError] = useState<string | null>(null);
+  const currentUserId = user?.id || 'anonymous';
   const autosaveTimerRef = useRef<number | null>(null);
 
   const activeTheme = ALL_READER_THEMES.find(t => t.id === settings.activeThemeId) || ALL_READER_THEMES[0];
@@ -409,14 +414,23 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     reason?: string;
   }) => {
     if (!book) return;
-    const newEdit = await source.createEdit(book.id, currentChapterIndex, data);
-    setEdits(prev => [...prev.filter(e => e.id !== newEdit.id), newEdit]);
+    setIsEditSaving(true);
+    setEditSaveError(null);
+    try {
+      const newEdit = await source.createEdit(book.id, currentChapterIndex, data);
+      setEdits(prev => [...prev.filter(e => e.id !== newEdit.id), newEdit]);
 
-    // If chapter was completed, mark back to IN_PROGRESS locally
-    setWorkflowMap(prev => ({
-      ...prev,
-      [currentChapterIndex]: { ...prev[currentChapterIndex], status: 'IN_PROGRESS' },
-    }));
+      // If chapter was completed, mark back to IN_PROGRESS locally
+      setWorkflowMap(prev => ({
+        ...prev,
+        [currentChapterIndex]: { ...prev[currentChapterIndex], status: 'IN_PROGRESS' },
+      }));
+    } catch (err: any) {
+      setEditSaveError(err?.message || 'Không thể lưu chỉnh sửa');
+      throw err;
+    } finally {
+      setIsEditSaving(false);
+    }
   };
 
   const updateExistingEdit = async (data: {
@@ -426,24 +440,42 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     expectedVersion?: number;
   }) => {
     if (!book || !selectedEdit) return;
-    const updated = await source.updateEdit(book.id, currentChapterIndex, selectedEdit.id, data);
-    setEdits(prev => prev.map(e => e.id === updated.id ? updated : e));
-    setSelectedEdit(updated);
+    setIsEditSaving(true);
+    setEditSaveError(null);
+    try {
+      const updated = await source.updateEdit(book.id, currentChapterIndex, selectedEdit.id, data);
+      setEdits(prev => prev.map(e => e.id === updated.id ? updated : e));
+      setSelectedEdit(updated);
 
-    // Revert status to IN_PROGRESS if completed
-    setWorkflowMap(prev => ({
-      ...prev,
-      [currentChapterIndex]: { ...prev[currentChapterIndex], status: 'IN_PROGRESS' },
-    }));
+      // Revert status to IN_PROGRESS if completed
+      setWorkflowMap(prev => ({
+        ...prev,
+        [currentChapterIndex]: { ...prev[currentChapterIndex], status: 'IN_PROGRESS' },
+      }));
+    } catch (err: any) {
+      setEditSaveError(err?.message || 'Không thể cập nhật chỉnh sửa');
+      throw err;
+    } finally {
+      setIsEditSaving(false);
+    }
   };
 
   const revertEdit = async (edit: BetaEdit) => {
     if (!book) return;
-    await source.deleteEdit(book.id, currentChapterIndex, edit.id);
-    // Remove from active rendered edits list
-    setEdits(prev => prev.filter(e => e.id !== edit.id));
-    setIsDetailModalOpen(false);
-    setSelectedEdit(null);
+    setIsEditSaving(true);
+    setEditSaveError(null);
+    try {
+      await source.deleteEdit(book.id, currentChapterIndex, edit.id);
+      // Remove from active rendered edits list
+      setEdits(prev => prev.filter(e => e.id !== edit.id));
+      setIsDetailModalOpen(false);
+      setSelectedEdit(null);
+    } catch (err: any) {
+      setEditSaveError(err?.message || 'Không thể hoàn tác chỉnh sửa');
+      throw err;
+    } finally {
+      setIsEditSaving(false);
+    }
   };
 
   const saveNote = async (data: {
@@ -484,6 +516,9 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         isConfirmCompleteOpen,
         isAutosaving,
         lastSavedText,
+        isEditSaving,
+        editSaveError,
+        currentUserId,
         edits,
         notes,
         viewMode,
