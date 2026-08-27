@@ -110,6 +110,7 @@ export const toggleBetaReaderStatus = (req: Request, res: Response): void => {
 };
 
 export const listBooks = (_req: Request, res: Response): void => {
+  // Query books without duplicating rows
   const books = queryAll<any>(`
     SELECT 
       b.id,
@@ -124,40 +125,83 @@ export const listBooks = (_req: Request, res: Response): void => {
       b.status,
       b.created_by AS createdBy,
       b.created_at AS createdAt,
-      b.updated_at AS updatedAt,
-      p.id AS assignedUserId,
-      p.username AS assignedUsername,
-      p.display_name AS assignedDisplayName,
-      ba.assigned_at AS assignedAt,
-      ba.status AS assignmentStatus
+      b.updated_at AS updatedAt
     FROM beta_books b
-    LEFT JOIN beta_assignments ba ON ba.book_id = b.id AND ba.status = 'ACTIVE'
-    LEFT JOIN profiles p ON p.id = ba.beta_user_id
     ORDER BY b.created_at DESC
   `);
 
-  const formatted = books.map(b => ({
-    id: b.id,
-    title: b.title,
-    author: b.author,
-    coverUrl: b.coverUrl,
-    coverColor: b.coverColor,
-    originalFileName: b.originalFileName,
-    fileFormat: b.fileFormat,
-    totalChapters: b.totalChapters,
-    wordCount: b.wordCount,
-    status: b.status,
-    createdBy: b.createdBy,
-    createdAt: b.createdAt,
-    updatedAt: b.updatedAt,
-    assignedTo: b.assignedUserId ? {
-      id: b.assignedUserId,
-      username: b.assignedUsername,
-      displayName: b.assignedDisplayName,
-      assignedAt: b.assignedAt,
-      status: b.assignmentStatus,
-    } : null,
-  }));
+  // Query all active assignments with reader profile and progress
+  const assignments = queryAll<any>(`
+    SELECT 
+      ba.id,
+      ba.book_id AS bookId,
+      ba.beta_user_id AS betaUserId,
+      ba.assigned_at AS assignedAt,
+      ba.status AS assignmentStatus,
+      p.username,
+      p.display_name AS displayName,
+      COALESCE(ap.current_chapter_index, 1) AS currentChapterIndex,
+      COALESCE(ap.overall_percentage, 0) AS overallPercentage,
+      COALESCE(ap.completed_chapters_count, 0) AS completedChaptersCount,
+      ap.last_read_at AS lastReadAt
+    FROM beta_assignments ba
+    JOIN profiles p ON p.id = ba.beta_user_id
+    LEFT JOIN beta_assignment_progress ap ON ap.assignment_id = ba.id
+    WHERE ba.status = 'ACTIVE'
+  `);
+
+  // Group assignments by bookId
+  const assignmentMap: Record<string, any[]> = {};
+  for (const a of assignments) {
+    if (!assignmentMap[a.bookId]) {
+      assignmentMap[a.bookId] = [];
+    }
+    assignmentMap[a.bookId].push({
+      id: a.id,
+      betaUserId: a.betaUserId,
+      username: a.username,
+      displayName: a.displayName,
+      assignedAt: a.assignedAt,
+      status: a.assignmentStatus,
+      currentChapterIndex: a.currentChapterIndex,
+      overallPercentage: a.overallPercentage,
+      completedChaptersCount: a.completedChaptersCount,
+      lastReadAt: a.lastReadAt,
+    });
+  }
+
+  const formatted = books.map(b => {
+    const bookAssignments = assignmentMap[b.id] || [];
+    const firstAssignment = bookAssignments[0] || null;
+
+    return {
+      id: b.id,
+      title: b.title,
+      author: b.author,
+      coverUrl: b.coverUrl,
+      coverColor: b.coverColor,
+      originalFileName: b.originalFileName,
+      fileFormat: b.fileFormat,
+      totalChapters: b.totalChapters,
+      wordCount: b.wordCount,
+      status: b.status,
+      createdBy: b.createdBy,
+      createdAt: b.createdAt,
+      updatedAt: b.updatedAt,
+      assignments: bookAssignments,
+      assignedTo: firstAssignment ? {
+        id: firstAssignment.betaUserId,
+        username: firstAssignment.username,
+        displayName: firstAssignment.displayName,
+        assignedAt: firstAssignment.assignedAt,
+        status: firstAssignment.status,
+        completedChaptersCount: firstAssignment.completedChaptersCount,
+        currentChapterIndex: firstAssignment.currentChapterIndex,
+        overallPercentage: firstAssignment.overallPercentage,
+        lastReadAt: firstAssignment.lastReadAt,
+      } : null,
+    };
+  });
 
   res.json({ books: formatted });
 };
@@ -316,9 +360,9 @@ export const assignBook = (req: Request, res: Response): void => {
       id
     );
 
-    // 3. Initialize progress row if not existing
+    // 3. Initialize assignment progress row if not existing
     const existingProgress = queryOne(
-      'SELECT id FROM beta_chapter_progress WHERE book_id = ? AND beta_user_id = ?',
+      'SELECT id FROM beta_assignment_progress WHERE book_id = ? AND beta_user_id = ?',
       id,
       betaUserId
     );
@@ -326,13 +370,14 @@ export const assignBook = (req: Request, res: Response): void => {
     if (!existingProgress) {
       const progressId = `prog-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       run(
-        `INSERT INTO beta_chapter_progress (
-          id, assignment_id, book_id, beta_user_id, status, chapter_index, scroll_percent, percentage, updated_at
-        ) VALUES (?, ?, ?, ?, 'NOT_STARTED', 1, 0, 0, ?)`,
+        `INSERT INTO beta_assignment_progress (
+          id, assignment_id, book_id, beta_user_id, current_chapter_index, overall_percentage, completed_chapters_count, last_read_at, updated_at
+        ) VALUES (?, ?, ?, ?, 1, 0, 0, ?, ?)`,
         progressId,
         assignmentId,
         id,
         betaUserId,
+        now,
         now
       );
     }
@@ -378,7 +423,7 @@ export const revokeAssignment = (req: Request, res: Response): void => {
   );
 
   // Check if any other active assignment exists for this book
-  const otherAssignments = queryOne(
+  const otherAssignments = queryOne<any>(
     `SELECT COUNT(id) AS count FROM beta_assignments WHERE book_id = ? AND status = 'ACTIVE'`,
     id
   );

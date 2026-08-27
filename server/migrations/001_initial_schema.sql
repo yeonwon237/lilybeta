@@ -1,4 +1,4 @@
--- LilyBeta Phase 1: Database Schema
+-- LilyBeta Phase 2: Database Schema
 
 -- 1. Profiles table (Admin & Beta Readers)
 CREATE TABLE IF NOT EXISTS profiles (
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS beta_chapters (
 CREATE INDEX IF NOT EXISTS idx_beta_chapters_book ON beta_chapters(book_id);
 CREATE INDEX IF NOT EXISTS idx_beta_chapters_index ON beta_chapters(book_id, chapter_index);
 
--- 4. Beta Assignments table
+-- 4. Beta Assignments table (Supports Multi-Assignment per Book)
 CREATE TABLE IF NOT EXISTS beta_assignments (
   id TEXT PRIMARY KEY,
   book_id TEXT NOT NULL REFERENCES beta_books(id) ON DELETE CASCADE,
@@ -65,25 +65,61 @@ CREATE TABLE IF NOT EXISTS beta_assignments (
 CREATE INDEX IF NOT EXISTS idx_beta_assignments_user ON beta_assignments(beta_user_id, status);
 CREATE INDEX IF NOT EXISTS idx_beta_assignments_book ON beta_assignments(book_id, status);
 
--- 5. Beta Chapter Progress table
-CREATE TABLE IF NOT EXISTS beta_chapter_progress (
+-- 5. Beta Assignment Progress table (Book-level overall progress)
+CREATE TABLE IF NOT EXISTS beta_assignment_progress (
   id TEXT PRIMARY KEY,
   assignment_id TEXT NOT NULL REFERENCES beta_assignments(id) ON DELETE CASCADE,
   book_id TEXT NOT NULL REFERENCES beta_books(id) ON DELETE CASCADE,
-  chapter_id TEXT REFERENCES beta_chapters(id) ON DELETE CASCADE,
   beta_user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  status TEXT NOT NULL DEFAULT 'IN_PROGRESS' CHECK(status IN ('NOT_STARTED', 'IN_PROGRESS', 'READY', 'COMPLETED')),
-  chapter_index INTEGER NOT NULL DEFAULT 1,
-  scroll_percent REAL DEFAULT 0,
-  scroll_offset REAL DEFAULT 0,
-  percentage REAL DEFAULT 0,
+  current_chapter_index INTEGER NOT NULL DEFAULT 1,
+  overall_percentage REAL DEFAULT 0,
+  completed_chapters_count INTEGER NOT NULL DEFAULT 0,
+  last_read_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(book_id, beta_user_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_beta_progress_user ON beta_chapter_progress(beta_user_id, book_id);
+CREATE INDEX IF NOT EXISTS idx_beta_assignment_progress_user ON beta_assignment_progress(beta_user_id, book_id);
 
--- 6. Beta Activity Logs table
+-- 6. Beta Chapter Status table (Individual chapter workflow lifecycle)
+CREATE TABLE IF NOT EXISTS beta_chapter_status (
+  id TEXT PRIMARY KEY,
+  assignment_id TEXT NOT NULL REFERENCES beta_assignments(id) ON DELETE CASCADE,
+  book_id TEXT NOT NULL REFERENCES beta_books(id) ON DELETE CASCADE,
+  chapter_id TEXT REFERENCES beta_chapters(id) ON DELETE CASCADE,
+  chapter_index INTEGER NOT NULL,
+  beta_user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'NOT_STARTED' CHECK(status IN ('NOT_STARTED', 'IN_PROGRESS', 'READY', 'COMPLETED')),
+  started_at TEXT,
+  ready_at TEXT,
+  completed_at TEXT,
+  last_scroll_percent REAL DEFAULT 0,
+  last_scroll_offset REAL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  UNIQUE(assignment_id, chapter_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_beta_chapter_status_assign ON beta_chapter_status(assignment_id, chapter_index);
+CREATE INDEX IF NOT EXISTS idx_beta_chapter_status_book ON beta_chapter_status(book_id, beta_user_id);
+
+-- Legacy compatibility view for beta_chapter_progress
+CREATE VIEW IF NOT EXISTS beta_chapter_progress AS
+SELECT 
+  ap.id,
+  ap.assignment_id,
+  ap.book_id,
+  cs.chapter_id,
+  ap.beta_user_id,
+  COALESCE(cs.status, 'NOT_STARTED') AS status,
+  ap.current_chapter_index AS chapter_index,
+  COALESCE(cs.last_scroll_percent, 0) AS scroll_percent,
+  COALESCE(cs.last_scroll_offset, 0) AS scroll_offset,
+  ap.overall_percentage AS percentage,
+  ap.updated_at
+FROM beta_assignment_progress ap
+LEFT JOIN beta_chapter_status cs ON cs.assignment_id = ap.assignment_id AND cs.chapter_index = ap.current_chapter_index;
+
+-- 7. Beta Activity Logs table
 CREATE TABLE IF NOT EXISTS beta_activity_logs (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES profiles(id),
@@ -97,7 +133,7 @@ CREATE TABLE IF NOT EXISTS beta_activity_logs (
 CREATE INDEX IF NOT EXISTS idx_beta_activity_user ON beta_activity_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_beta_activity_action ON beta_activity_logs(action);
 
--- 7. Future Entities (Schema prepared for Phase 2 & 3: Inline Edits, Notes, Revisions)
+-- 8. Future Entities (Schema prepared for Phase 3: Inline Edits, Notes, Revisions)
 CREATE TABLE IF NOT EXISTS beta_edits (
   id TEXT PRIMARY KEY,
   book_id TEXT NOT NULL REFERENCES beta_books(id) ON DELETE CASCADE,

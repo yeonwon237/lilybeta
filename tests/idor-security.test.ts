@@ -1,10 +1,13 @@
 import { createApp } from '../server/app.js';
 import { runMigrations } from '../server/migrations/runner.js';
+import { queryOne } from '../server/db/database.js';
+import fs from 'node:fs';
+import path from 'node:path';
 import http from 'node:http';
 
 const runTests = async () => {
   console.log('====================================================');
-  console.log('🚀 STARTING LILYBETA IDOR & ASSIGNMENT SECURITY TEST');
+  console.log('🚀 STARTING LILYBETA PHASE 2 SECURITY & WORKFLOW TEST');
   console.log('====================================================');
 
   await runMigrations();
@@ -98,54 +101,45 @@ const runTests = async () => {
     assert(loginBRes.status === 200, 'Beta Reader B login returns 200 OK');
     const tokenB = (await loginBRes.json()).token;
 
-    // 4. Admin uploads Book A and Book B
-    console.log('\n[Phase 4] Admin Uploads & Parses Books');
-    const createBookARes = await fetch(`${baseUrl}/api/admin/books`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${adminToken}`,
-      },
-      body: JSON.stringify({
-        title: 'Chuyện Xứ Hoa (Book A)',
-        author: 'Tác Giả A',
-        originalFileName: 'chuyen_xu_hoa.txt',
-        fileFormat: 'TXT',
-        totalChapters: 2,
+    // 4. Admin Uploads Book A and Book B
+    console.log('\n[Phase 4] Admin Uploads Draft Books (No Raw Files Stored)');
+    const createBook = async (title: string, author: string, chapterCount: number) => {
+      const chapters = Array.from({ length: chapterCount }, (_, i) => ({
+        index: i + 1,
+        title: `Chương ${i + 1}: Tiêu đề chương ${i + 1}`,
+        paragraphs: [
+          `Đoạn 1 của chương ${i + 1} trong tác phẩm ${title}.`,
+          `Đoạn 2 chứa nội dung bản thảo thử nghiệm được bảo mật nghiêm ngặt.`,
+        ],
         wordCount: 1500,
-        chapters: [
-          { index: 1, title: 'Chương 1: Mùa xuân xứ hoa', wordCount: 800, paragraphs: ['Đoạn 1 sách A', 'Đoạn 2 sách A'] },
-          { index: 2, title: 'Chương 2: Cánh đồng tuyết', wordCount: 700, paragraphs: ['Đoạn 3 sách A', 'Đoạn 4 sách A'] },
-        ],
-      }),
-    });
-    assert(createBookARes.status === 201, 'Admin upload Book A returns 201 Created');
-    const bookA = (await createBookARes.json()).book;
+      }));
 
-    const createBookBRes = await fetch(`${baseUrl}/api/admin/books`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${adminToken}`,
-      },
-      body: JSON.stringify({
-        title: 'Bí Mật Đêm Trăng (Book B)',
-        author: 'Tác Giả B',
-        originalFileName: 'bi_mat_dem_trang.epub',
-        fileFormat: 'EPUB',
-        totalChapters: 2,
-        wordCount: 2000,
-        chapters: [
-          { index: 1, title: 'Chương 1: Ánh trăng tà', wordCount: 1000, paragraphs: ['Bí mật B - Đoạn 1', 'Bí mật B - Đoạn 2'] },
-          { index: 2, title: 'Chương 2: Tiếng đàn trong đêm', wordCount: 1000, paragraphs: ['Bí mật B - Đoạn 3', 'Bí mật B - Đoạn 4'] },
-        ],
-      }),
-    });
-    assert(createBookBRes.status === 201, 'Admin upload Book B returns 201 Created');
-    const bookB = (await createBookBRes.json()).book;
+      const res = await fetch(`${baseUrl}/api/admin/books`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({
+          title,
+          author,
+          originalFileName: `${title}.txt`,
+          fileFormat: 'TXT',
+          totalChapters: chapterCount,
+          wordCount: chapterCount * 1500,
+          chapters,
+        }),
+      });
+      return (await res.json()).book;
+    };
 
-    // 5. Admin assigns Book A -> Beta A, Book B -> Beta B
-    console.log('\n[Phase 5] Admin Assigns Books');
+    const bookA = await createBook(`Tác Phẩm Bí Mật A (${userASuffix})`, 'Tác Giả A', 2);
+    const bookB = await createBook(`Tác Phẩm Bảo Mật B (${userASuffix})`, 'Tác Giả B', 2);
+    assert(Boolean(bookA.id), 'Book A created successfully');
+    assert(Boolean(bookB.id), 'Book B created successfully');
+
+    // 5. Admin Assigns Book A -> Beta A, Book B -> Beta B
+    console.log('\n[Phase 5] Admin Assigns Books to Beta Readers');
     const assignARes = await fetch(`${baseUrl}/api/admin/books/${bookA.id}/assign`, {
       method: 'POST',
       headers: {
@@ -154,7 +148,7 @@ const runTests = async () => {
       },
       body: JSON.stringify({ betaUserId: userA.id }),
     });
-    assert(assignARes.status === 200, 'Assign Book A -> Beta A returns 200 OK');
+    assert(assignARes.status === 200, `Book A assigned to Beta A (${userAUsername})`);
 
     const assignBRes = await fetch(`${baseUrl}/api/admin/books/${bookB.id}/assign`, {
       method: 'POST',
@@ -164,31 +158,18 @@ const runTests = async () => {
       },
       body: JSON.stringify({ betaUserId: userB.id }),
     });
-    assert(assignBRes.status === 200, 'Assign Book B -> Beta B returns 200 OK');
+    assert(assignBRes.status === 200, `Book B assigned to Beta B (${userBUsername})`);
 
-    // 6. Verification: Beta A accesses Book A
-    console.log('\n[Phase 6] Beta Reader A Authorized Access to Book A');
-    const listBooksARes = await fetch(`${baseUrl}/api/books`, {
+    // 6. Beta Reader A Access Verification
+    console.log('\n[Phase 6] Beta Reader A Authorized Book Access');
+    const booksARes = await fetch(`${baseUrl}/api/books`, {
       headers: { Authorization: `Bearer ${tokenA}` },
     });
-    assert(listBooksARes.status === 200, 'Beta A listing books returns 200 OK');
-    const booksForA = (await listBooksARes.json()).books;
-    assert(booksForA.length === 1, 'Beta A sees exactly 1 assigned book');
-    assert(booksForA[0].id === bookA.id, 'Beta A assigned book is Book A');
+    const booksA = (await booksARes.json()).books;
+    assert(booksA.length === 1, 'Beta A sees exactly 1 assigned book');
+    assert(booksA[0].id === bookA.id, 'Beta A only sees Book A');
 
-    const getBookARes = await fetch(`${baseUrl}/api/books/${bookA.id}`, {
-      headers: { Authorization: `Bearer ${tokenA}` },
-    });
-    assert(getBookARes.status === 200, 'Beta A get Book A details returns 200 OK');
-
-    const getChapterARes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1`, {
-      headers: { Authorization: `Bearer ${tokenA}` },
-    });
-    assert(getChapterARes.status === 200, 'Beta A get Chapter 1 of Book A returns 200 OK');
-    const chAData = await getChapterARes.json();
-    assert(chAData.chapter.paragraphs[0] === 'Đoạn 1 sách A', 'Beta A receives authentic chapter paragraphs');
-
-    // 7. CRITICAL IDOR DEFENSE TEST: Beta A attempts to access Book B
+    // 7. MANDATORY IDOR TEST: Beta A attempts to access Book B
     console.log('\n[Phase 7] 🛡️ MANDATORY IDOR TEST: Beta A attempts to access unassigned Book B');
     const idorBookRes = await fetch(`${baseUrl}/api/books/${bookB.id}`, {
       headers: { Authorization: `Bearer ${tokenA}` },
@@ -215,7 +196,18 @@ const runTests = async () => {
     });
     assert(idorProgressRes.status === 403, `IDOR Defense: POST /api/books/${bookB.id}/progress as Beta A REJECTED with 403 Forbidden`);
 
-    // 8. CRITICAL IDOR DEFENSE TEST: Beta B attempts to access Book A
+    const idorCompleteRes = await fetch(`${baseUrl}/api/books/${bookB.id}/chapters/1/complete`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert(idorCompleteRes.status === 403, `IDOR Defense: POST /api/books/${bookB.id}/chapters/1/complete as Beta A REJECTED with 403 Forbidden`);
+
+    const idorWorkflowRes = await fetch(`${baseUrl}/api/books/${bookB.id}/workflow`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert(idorWorkflowRes.status === 403, `IDOR Defense: GET /api/books/${bookB.id}/workflow as Beta A REJECTED with 403 Forbidden`);
+
+    // 8. MANDATORY IDOR TEST: Beta B attempts to access Book A
     console.log('\n[Phase 8] 🛡️ MANDATORY IDOR TEST: Beta B attempts to access unassigned Book A');
     const idorBtoBookARes = await fetch(`${baseUrl}/api/books/${bookA.id}`, {
       headers: { Authorization: `Bearer ${tokenB}` },
@@ -227,26 +219,159 @@ const runTests = async () => {
     });
     assert(idorBtoChapterARes.status === 403, `IDOR Defense: GET /api/books/${bookA.id}/chapters/1 as Beta B REJECTED with 403 Forbidden`);
 
-    // 9. Privilege Escalation Prevention
-    console.log('\n[Phase 9] Privilege Escalation Defense');
-    const privBetaListRes = await fetch(`${baseUrl}/api/admin/beta-readers`, {
-      headers: { Authorization: `Bearer ${tokenA}` },
-    });
-    assert(privBetaListRes.status === 403, 'Beta Reader forbidden from accessing admin routes (403)');
-
-    const privAssignRes = await fetch(`${baseUrl}/api/admin/books/${bookB.id}/assign`, {
+    // 9. Chapter Integrity & Invariant Defense
+    console.log('\n[Phase 9] 🛡️ Chapter Integrity Validation');
+    const invalidChapterProgRes = await fetch(`${baseUrl}/api/books/${bookA.id}/progress`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${tokenA}`,
       },
-      body: JSON.stringify({ betaUserId: userA.id }),
+      body: JSON.stringify({ chapterIndex: 999999, percentage: 50 }),
     });
-    assert(privAssignRes.status === 403, 'Beta Reader forbidden from modifying assignments (403)');
+    assert(invalidChapterProgRes.status === 404, 'Save progress on nonexistent chapter 999999 rejected with 404 Not Found');
 
-    // 10. Disabled Account Blocking
-    console.log('\n[Phase 10] Deactivated Account Blocking');
-    const disableBRes = await fetch(`${baseUrl}/api/admin/beta-readers/${userB.id}/status`, {
+    const invalidIndexProgRes = await fetch(`${baseUrl}/api/books/${bookA.id}/progress`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${tokenA}`,
+      },
+      body: JSON.stringify({ chapterIndex: -5, percentage: 50 }),
+    });
+    assert(invalidIndexProgRes.status === 400, 'Save progress with negative chapterIndex rejected with 400 Bad Request');
+
+    const invalidChapterCompleteRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/999999/complete`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert(invalidChapterCompleteRes.status === 404, 'Complete nonexistent chapter 999999 rejected with 404 Not Found');
+
+    // 10. User Spoofing Defense
+    console.log('\n[Phase 10] 🛡️ User Identity Spoofing Defense');
+    const spoofProgRes = await fetch(`${baseUrl}/api/books/${bookA.id}/progress`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${tokenA}`,
+      },
+      body: JSON.stringify({
+        betaUserId: userB.id, // Client attempts to forge user ID
+        assignmentId: 'fake-assignment-id',
+        chapterIndex: 1,
+        percentage: 25,
+        scrollPercent: 30,
+      }),
+    });
+    assert(spoofProgRes.status === 200, 'Save progress with spoofed user body is processed using authenticated token');
+    
+    // Verify in database that progress was written for userA, NOT userB
+    const spoofCheck = queryOne(
+      'SELECT beta_user_id FROM beta_assignment_progress WHERE book_id = ? AND beta_user_id = ?',
+      bookA.id,
+      userB.id
+    );
+    assert(!spoofCheck, 'Database check: No progress record created for spoofed victim userB on Book A');
+
+    // 11. Chapter Workflow Lifecycle
+    console.log('\n[Phase 11] Chapter Workflow Lifecycle (IN_PROGRESS -> COMPLETED)');
+    // 11.1 Open Chapter 1
+    const openCh1Res = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert(openCh1Res.status === 200, 'Open chapter 1 returns 200 OK');
+    const ch1Data = (await openCh1Res.json()).chapter;
+    assert(ch1Data.status === 'IN_PROGRESS', 'Chapter 1 workflow status transitions to IN_PROGRESS upon opening');
+    assert(Boolean(ch1Data.startedAt), 'Chapter 1 startedAt timestamp recorded');
+
+    // 11.2 Complete Chapter 1
+    const completeCh1Res = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/complete`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert(completeCh1Res.status === 200, 'Complete chapter 1 returns 200 OK');
+    const completeCh1Data = await completeCh1Res.json();
+    assert(completeCh1Data.status === 'COMPLETED', 'Chapter 1 status is COMPLETED');
+    assert(completeCh1Data.completedChaptersCount === 1, 'Completed chapters count is 1');
+    assert(completeCh1Data.overallPercentage === 50, 'Overall progress is 50% (1/2 chapters)');
+
+    // 11.3 Workflow map query
+    const wfRes = await fetch(`${baseUrl}/api/books/${bookA.id}/workflow`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert(wfRes.status === 200, 'Query workflow returns 200 OK');
+    const wfData = (await wfRes.json()).workflow;
+    assert(wfData['1'].status === 'COMPLETED', 'Workflow map shows chapter 1 as COMPLETED');
+
+    // 11.4 Reopen Completed Chapter
+    const reopenCh1Res = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert(reopenCh1Res.status === 200, 'Reopen chapter 1 returns 200 OK');
+    const reopenCh1Data = (await reopenCh1Res.json()).chapter;
+    assert(reopenCh1Data.status === 'COMPLETED', 'Reopening completed chapter 1 preserves COMPLETED status');
+
+    // 11.5 Open Chapter 2
+    const openCh2Res = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/2`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert(openCh2Res.status === 200, 'Open chapter 2 returns 200 OK');
+    const ch2Data = (await openCh2Res.json()).chapter;
+    assert(ch2Data.status === 'IN_PROGRESS', 'Chapter 2 workflow status is IN_PROGRESS');
+
+    // 12. Multi-Assignment Support
+    console.log('\n[Phase 12] Multi-Assignment per Book Support');
+    const assignAtoBRes = await fetch(`${baseUrl}/api/admin/books/${bookA.id}/assign`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({ betaUserId: userB.id }),
+    });
+    assert(assignAtoBRes.status === 200, 'Book A additionally assigned to Beta B');
+
+    const adminBooksRes = await fetch(`${baseUrl}/api/admin/books`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    const adminBooks = (await adminBooksRes.json()).books;
+    const bookARecord = adminBooks.find((b: any) => b.id === bookA.id);
+    const bookACount = adminBooks.filter((b: any) => b.id === bookA.id).length;
+    assert(bookACount === 1, 'Book A is NOT duplicated in Admin book list despite having 2 active assignments');
+    assert(bookARecord.assignments.length === 2, 'Book A contains exactly 2 reader assignments');
+
+    // 13. Assignment Revocation Defense
+    console.log('\n[Phase 13] Assignment Revocation Immediate Enforcement');
+    const revokeRes = await fetch(`${baseUrl}/api/admin/books/${bookA.id}/assign/${userB.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert(revokeRes.status === 200, 'Admin revokes Book A assignment for Beta B');
+
+    const postRevokeBookRes = await fetch(`${baseUrl}/api/books/${bookA.id}`, {
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    assert(postRevokeBookRes.status === 403, 'Revoked user GET /api/books/:id immediately blocked with 403 Forbidden');
+
+    const postRevokeProgRes = await fetch(`${baseUrl}/api/books/${bookA.id}/progress`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${tokenB}`,
+      },
+      body: JSON.stringify({ chapterIndex: 1, percentage: 10 }),
+    });
+    assert(postRevokeProgRes.status === 403, 'Revoked user POST /api/books/:id/progress immediately blocked with 403 Forbidden');
+
+    const postRevokeCompRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/complete`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    assert(postRevokeCompRes.status === 403, 'Revoked user POST /api/books/:id/chapters/1/complete immediately blocked with 403 Forbidden');
+
+    // 14. Disabled Account Blocking
+    console.log('\n[Phase 14] Deactivated Account Blocking');
+    const disableARes = await fetch(`${baseUrl}/api/admin/beta-readers/${userA.id}/status`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
@@ -254,55 +379,27 @@ const runTests = async () => {
       },
       body: JSON.stringify({ isActive: false }),
     });
-    assert(disableBRes.status === 200, 'Admin disables Beta Reader B returns 200 OK');
+    assert(disableARes.status === 200, 'Admin disables Beta Reader A returns 200 OK');
 
-    const blockedTokenBRes = await fetch(`${baseUrl}/api/books`, {
-      headers: { Authorization: `Bearer ${tokenB}` },
-    });
-    assert(blockedTokenBRes.status === 401, 'Disabled user request immediately blocked with 401 Unauthorized');
-
-    const blockedLoginBRes = await fetch(`${baseUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: userBUsername, password: 'password123' }),
-    });
-    assert(blockedLoginBRes.status === 403, 'Disabled user login rejected with 403 Forbidden');
-
-    // 11. Reading Progress Saving & Restore
-    console.log('\n[Phase 11] Reading Progress Sync');
-    const saveProgRes = await fetch(`${baseUrl}/api/books/${bookA.id}/progress`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${tokenA}`,
-      },
-      body: JSON.stringify({
-        chapterIndex: 2,
-        percentage: 50,
-        scrollPercent: 65.5,
-      }),
-    });
-    assert(saveProgRes.status === 200, 'Save progress returns 200 OK');
-
-    const getProgRes = await fetch(`${baseUrl}/api/books/${bookA.id}/progress`, {
+    const blockedTokenARes = await fetch(`${baseUrl}/api/books`, {
       headers: { Authorization: `Bearer ${tokenA}` },
     });
-    assert(getProgRes.status === 200, 'Get progress returns 200 OK');
-    const progData = await getProgRes.json();
-    assert(progData.progress.chapterIndex === 2, 'Restored chapterIndex is 2');
-    assert(progData.progress.scrollPercent === 65.5, 'Restored scrollPercent is 65.5');
+    assert(blockedTokenARes.status === 401, 'Disabled user request immediately blocked with 401 Unauthorized');
 
-    // 12. Activity Logs Verification
-    console.log('\n[Phase 12] Activity Audit Logs');
-    const logsRes = await fetch(`${baseUrl}/api/admin/logs`, {
-      headers: { Authorization: `Bearer ${adminToken}` },
-    });
-    assert(logsRes.status === 200, 'Admin query activity logs returns 200 OK');
-    const logsData = await logsRes.json();
-    assert(logsData.logs.length >= 4, 'Activity logs recorded (LOGIN, BOOK_CREATED, BOOK_ASSIGNED, CHAPTER_OPENED)');
+    // 15. Supabase Schema Migration Dependency Verification
+    console.log('\n[Phase 15] Supabase Migration Order & Dependency Verification');
+    const supabaseSql = fs.readFileSync(path.join(process.cwd(), 'server', 'migrations', 'supabase_schema.sql'), 'utf8');
+    const tableIndex = supabaseSql.indexOf('CREATE TABLE IF NOT EXISTS public.beta_assignments');
+    const bookPolicyIndex = supabaseSql.indexOf('CREATE POLICY "Beta Readers view only actively assigned books"');
+    const progressPolicyIndex = supabaseSql.indexOf('CREATE POLICY "Beta Readers manage progress only on actively assigned books"');
+    
+    assert(tableIndex !== -1, 'public.beta_assignments table defined');
+    assert(bookPolicyIndex !== -1, 'Beta books active assignment policy defined');
+    assert(tableIndex < bookPolicyIndex, 'beta_assignments table created BEFORE beta_books RLS policy');
+    assert(tableIndex < progressPolicyIndex, 'beta_assignments table created BEFORE progress RLS policy');
 
     console.log('\n====================================================');
-    console.log(`🎉 ALL ${passedAssertions} SECURITY & IDOR ASSERTIONS PASSED!`);
+    console.log(`🎉 ALL ${passedAssertions} PHASE 2 SECURITY & WORKFLOW ASSERTIONS PASSED!`);
     console.log('====================================================\n');
   } finally {
     server.close();

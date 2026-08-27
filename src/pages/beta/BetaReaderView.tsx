@@ -1,84 +1,82 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { api, ApiError } from '../../services/api';
-import { Chapter } from '../../types';
-import { BetaCloudBookSource } from '../../book-engine/source/BetaCloudBookSource';
+import React, { useEffect, useRef } from 'react';
+import { useReader, ReaderProvider } from '../../context/ReaderContext';
+import { ReaderToolbar } from '../../components/reader/ReaderToolbar';
+import { AaSettingsSheet } from '../../components/reader/AaSettingsSheet';
+import { ThemeSelectorSheet } from '../../components/reader/ThemeSelectorSheet';
+import { TocDrawer } from '../../components/reader/TocDrawer';
+import { ConfirmCompleteModal } from '../../components/reader/ConfirmCompleteModal';
+import { Watermark } from '../../components/reader/Watermark';
 import { 
   ArrowLeft, 
   ChevronLeft, 
   ChevronRight, 
+  CheckCircle2, 
+  Check, 
   Loader2, 
-  ShieldAlert, 
-  Type, 
-  Minus, 
-  Plus,
-  BookOpen
+  ShieldAlert 
 } from 'lucide-react';
 
-interface BetaReaderViewProps {
+interface BetaReaderViewContentProps {
   bookId: string;
   initialChapterIndex: number;
   onBackToBook: () => void;
 }
 
-export const BetaReaderView: React.FC<BetaReaderViewProps> = ({
+const BetaReaderViewContent: React.FC<BetaReaderViewContentProps> = ({
   bookId,
   initialChapterIndex,
   onBackToBook,
 }) => {
-  const [chapterIndex, setChapterIndex] = useState(initialChapterIndex);
-  const [chapter, setChapter] = useState<Chapter | null>(null);
-  const [totalChapters, setTotalChapters] = useState<number>(1);
-  const [bookTitle, setBookTitle] = useState<string>('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [forbiddenError, setForbiddenError] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const { 
+    book,
+    currentChapterIndex,
+    currentChapter,
+    totalChapters,
+    settings,
+    activeTheme,
+    isLoadingChapter,
+    readerError,
+    initReader,
+    nextChapter,
+    prevChapter,
+    toggleToolbar,
+    triggerAutosave,
+    setIsConfirmCompleteOpen,
+    workflowMap,
+  } = useReader();
 
-  // Typography settings
-  const [fontSize, setFontSize] = useState<number>(18);
-  const contentRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  // Load chapter content
-  const loadChapter = async (targetIndex: number) => {
-    setIsLoading(true);
-    setForbiddenError(false);
-    setErrorMessage(null);
+  // Initialize on mount or when bookId changes
+  useEffect(() => {
+    initReader(bookId, initialChapterIndex);
+  }, [bookId]);
 
-    try {
-      // 1. Fetch chapter
-      const res = await api.get<{ chapter: Chapter }>(`/books/${bookId}/chapters/${targetIndex}`);
-      setChapter(res.chapter);
-      setChapterIndex(targetIndex);
+  // Scroll listener for cloud autosave (debounced 1s inside context)
+  useEffect(() => {
+    const handleScroll = () => {
+      const scrollY = window.scrollY;
+      const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+      if (scrollHeight <= 0) return;
 
-      // 2. Fetch book metadata if not loaded yet
-      if (!bookTitle) {
-        const bookRes = await api.get<any>(`/books/${bookId}`);
-        setBookTitle(bookRes.book?.title || '');
-        setTotalChapters(bookRes.book?.totalChapters || 1);
-      }
+      const scrollPercent = Math.min(100, Math.max(0, (scrollY / scrollHeight) * 100));
+      triggerAutosave(scrollPercent, scrollY);
+    };
 
-      // 3. Save progress
-      const source = BetaCloudBookSource.getInstance();
-      const percent = Math.round((targetIndex / (totalChapters || 1)) * 100);
-      await source.saveProgress(bookId, targetIndex, percent, res.chapter.title, 0, 0);
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [triggerAutosave]);
 
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    } catch (err: any) {
-      if (err instanceof ApiError && err.status === 403) {
-        setForbiddenError(true);
-      } else {
-        setErrorMessage(err?.message || 'Không thể tải nội dung chương.');
-      }
-    } finally {
-      setIsLoading(false);
-    }
+  // Handle click on reading area to toggle toolbar
+  const handleContentClick = (e: React.MouseEvent) => {
+    // If text was selected, do not toggle toolbar
+    const selection = window.getSelection();
+    if (selection && selection.toString().length > 0) return;
+    toggleToolbar();
   };
 
-  useEffect(() => {
-    loadChapter(chapterIndex);
-  }, [bookId, chapterIndex]);
-
-  // IDOR Defense screen
-  if (forbiddenError) {
+  // If unauthorized / IDOR barrier
+  if (readerError && readerError.includes('quyền')) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-[#FAF8F5]">
         <div className="max-w-md w-full bg-white rounded-3xl p-8 border border-rose-200 text-center space-y-4 shadow-sm">
@@ -87,132 +85,195 @@ export const BetaReaderView: React.FC<BetaReaderViewProps> = ({
           </div>
           <h2 className="text-xl font-bold text-ink-900">Truy cập bị từ chối (403)</h2>
           <p className="text-xs text-ink-600 leading-relaxed">
-            Bạn không có quyền đọc chương này vì tác phẩm chưa được phân công cho tài khoản của bạn.
+            {readerError}
           </p>
           <button
             onClick={onBackToBook}
             className="px-5 py-2.5 bg-ink-900 text-white rounded-xl text-xs font-semibold hover:bg-black transition"
           >
-            Quay lại
+            Quay lại danh sách truyện
           </button>
         </div>
       </div>
     );
   }
 
+  // Page width styling
+  const maxWidthClass = {
+    narrow: 'max-w-xl',
+    normal: 'max-w-2xl',
+    wide: 'max-w-3xl',
+    full: 'max-w-4xl',
+  }[settings.pageWidth || 'normal'];
+
+  const currentWorkflow = workflowMap[currentChapterIndex];
+  const isCompleted = currentWorkflow?.status === 'COMPLETED';
+
   return (
-    <div className="min-h-screen bg-[#FAF8F5] text-ink-900 flex flex-col selection:bg-purple-100 selection:text-purple-900">
-      {/* Reader Sticky Header */}
-      <header className="sticky top-0 z-30 bg-[#FAF8F5]/90 backdrop-blur-md border-b border-ink-100/80">
-        <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
-          <button
-            onClick={onBackToBook}
-            className="flex items-center gap-1 text-ink-600 hover:text-ink-900 text-xs font-semibold py-1.5 px-2.5 rounded-lg hover:bg-ink-200/50 transition"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Mục lục</span>
-          </button>
+    <div 
+      ref={containerRef}
+      className={`min-h-screen transition-colors duration-200 ${activeTheme.className} reader-deterrence`}
+      style={{ 
+        backgroundColor: 'var(--reader-bg)', 
+        color: 'var(--reader-text)',
+      }}
+      onClick={handleContentClick}
+    >
+      {/* Floating Toolbars */}
+      <ReaderToolbar onBack={onBackToBook} />
 
-          <div className="text-center min-w-0 px-2">
-            <p className="text-[11px] font-semibold text-ink-500 uppercase tracking-wider line-clamp-1">
-              {bookTitle || 'LilyBeta Reader'}
-            </p>
-            <p className="text-xs font-serif font-bold text-ink-800 line-clamp-1">
-              {chapter?.title || `Chương ${chapterIndex}`}
-            </p>
+      {/* Floating Sheets & Drawers */}
+      <AaSettingsSheet />
+      <ThemeSelectorSheet />
+      <TocDrawer />
+      <ConfirmCompleteModal />
+
+      {/* Watermark for Accountability Deterrence */}
+      <Watermark />
+
+      {/* Reading Article */}
+      <main 
+        className={`${maxWidthClass} mx-auto px-4 sm:px-6 pt-16 sm:pt-20 pb-28 sm:pb-36 transition-all duration-150`}
+        style={{
+          fontFamily: `"${settings.fontFamily}", serif`,
+          paddingLeft: `${Math.max(16, settings.marginHorizontal)}px`,
+          paddingRight: `${Math.max(16, settings.marginHorizontal)}px`,
+        }}
+      >
+        {isLoadingChapter ? (
+          <div className="py-32 flex flex-col items-center justify-center gap-3">
+            <Loader2 className="w-8 h-8 animate-spin text-purple-700" />
+            <p className="text-xs opacity-75 font-sans">Đang tải nội dung bản thảo...</p>
           </div>
-
-          {/* Font Controls */}
-          <div className="flex items-center gap-1 bg-white border border-ink-200 rounded-lg p-0.5">
+        ) : readerError ? (
+          <div className="p-8 rounded-3xl bg-rose-50/50 border border-rose-200 text-rose-900 text-center text-xs space-y-3 font-sans">
+            <p>{readerError}</p>
             <button
-              onClick={() => setFontSize((s) => Math.max(14, s - 2))}
-              className="p-1 text-ink-600 hover:text-ink-900 rounded hover:bg-ink-50"
-              title="Giảm cỡ chữ"
+              onClick={onBackToBook}
+              className="px-4 py-2 bg-ink-900 text-white rounded-xl text-xs font-semibold"
             >
-              <Minus className="w-3.5 h-3.5" />
-            </button>
-            <span className="text-[11px] font-mono font-semibold px-1 text-ink-700">{fontSize}</span>
-            <button
-              onClick={() => setFontSize((s) => Math.min(26, s + 2))}
-              className="p-1 text-ink-600 hover:text-ink-900 rounded hover:bg-ink-50"
-              title="Tăng cỡ chữ"
-            >
-              <Plus className="w-3.5 h-3.5" />
+              Quay lại mục lục
             </button>
           </div>
-        </div>
-      </header>
-
-      {/* Reader Body */}
-      <main className="max-w-2xl mx-auto px-5 sm:px-6 py-10 flex-1 w-full space-y-8">
-        {isLoading ? (
-          <div className="py-24 flex flex-col items-center justify-center gap-3 text-ink-500">
-            <Loader2 className="w-8 h-8 animate-spin text-purple-600" />
-            <p className="text-xs">Đang tải nội dung chương {chapterIndex}...</p>
-          </div>
-        ) : errorMessage ? (
-          <div className="bg-white rounded-3xl p-8 text-center border border-rose-100 text-rose-800 text-xs">
-            {errorMessage}
-          </div>
-        ) : chapter ? (
-          <article className="space-y-6">
+        ) : currentChapter ? (
+          <article className="space-y-8 animate-in fade-in duration-200">
             {/* Chapter Header */}
-            <div className="text-center pb-6 border-b border-ink-200/50 space-y-2">
-              <span className="text-xs font-mono font-semibold uppercase tracking-widest text-purple-700">
-                Chương {chapter.index} / {totalChapters}
-              </span>
-              <h2 className="text-2xl sm:text-3xl font-serif font-bold text-ink-900 tracking-tight leading-snug">
-                {chapter.title}
-              </h2>
-              <p className="text-xs text-ink-400 font-mono">
-                {chapter.wordCount.toLocaleString('vi-VN')} chữ
+            <div className="text-center pb-8 border-b border-ink-200/40 space-y-2">
+              <div className="flex items-center justify-center gap-2">
+                <span className="text-[11px] font-mono font-semibold uppercase tracking-widest opacity-60 font-sans">
+                  Chương {currentChapter.index} / {totalChapters}
+                </span>
+                {isCompleted && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-sans font-bold px-2 py-0.5 rounded-full bg-emerald-100/80 text-emerald-800 border border-emerald-300">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    <span>Đã beta xong</span>
+                  </span>
+                )}
+              </div>
+
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight leading-snug">
+                {currentChapter.title}
+              </h1>
+
+              <p className="text-[11px] opacity-60 font-mono font-sans">
+                {currentChapter.wordCount.toLocaleString('vi-VN')} chữ
               </p>
             </div>
 
-            {/* Chapter Paragraphs */}
-            <div
-              ref={contentRef}
-              className="font-serif leading-relaxed text-ink-900 space-y-5"
-              style={{ fontSize: `${fontSize}px`, lineHeight: 1.85 }}
+            {/* Paragraphs */}
+            <div 
+              className="reader-prose space-y-5"
+              style={{
+                fontSize: `${settings.fontSize}px`,
+                lineHeight: settings.lineHeight,
+                textAlign: settings.textAlign,
+              }}
             >
-              {chapter.paragraphs && chapter.paragraphs.length > 0 ? (
-                chapter.paragraphs.map((p, idx) => (
-                  <p key={idx} className="indent-6 tracking-normal">
+              {currentChapter.paragraphs && currentChapter.paragraphs.length > 0 ? (
+                currentChapter.paragraphs.map((p, idx) => (
+                  <p 
+                    key={idx} 
+                    className={settings.firstLineIndent ? 'indent-6' : ''}
+                    style={{ marginBottom: `${(settings.paragraphSpacing - 1) * 1.5}rem` }}
+                  >
                     {p}
                   </p>
                 ))
               ) : (
-                <p className="text-center text-ink-400 italic text-sm">Chương này chưa có nội dung văn bản.</p>
+                <p className="text-center opacity-50 italic text-sm py-12">
+                  Chương này chưa có nội dung văn bản.
+                </p>
               )}
             </div>
 
-            {/* Bottom Navigation */}
-            <div className="pt-10 pb-6 border-t border-ink-200/60 flex items-center justify-between gap-4">
-              <button
-                onClick={() => setChapterIndex((i) => Math.max(1, i - 1))}
-                disabled={chapterIndex <= 1}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-ink-200 text-xs font-semibold text-ink-700 hover:bg-white disabled:opacity-40 disabled:pointer-events-none transition"
-              >
-                <ChevronLeft className="w-4 h-4" />
-                <span>Chương trước</span>
-              </button>
+            {/* Chapter Completion Section */}
+            <div 
+              className="pt-12 pb-6 border-t border-ink-200/40 space-y-6 text-center font-sans"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {isCompleted ? (
+                <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-900 inline-flex flex-col items-center gap-1.5 max-w-sm mx-auto">
+                  <div className="flex items-center gap-2 font-bold text-xs">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span>Bạn đã hoàn thành beta chương này</span>
+                  </div>
+                  {currentWorkflow?.completedAt && (
+                    <span className="text-[10px] opacity-75 font-mono">
+                      Ghi nhận lúc: {new Date(currentWorkflow.completedAt).toLocaleString('vi-VN')}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-xs opacity-75">
+                    Đã đọc hết nội dung chương {currentChapterIndex}?
+                  </p>
+                  <button
+                    onClick={() => setIsConfirmCompleteOpen(true)}
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-purple-700 hover:bg-purple-800 text-white rounded-2xl text-xs font-semibold shadow-sm transition"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>Xác nhận đã beta xong chương {currentChapterIndex}</span>
+                  </button>
+                </div>
+              )}
 
-              <span className="text-xs font-mono text-ink-400">
-                {chapterIndex} / {totalChapters}
-              </span>
+              {/* Bottom Nav Stepper */}
+              <div className="flex items-center justify-between gap-4 pt-4">
+                <button
+                  onClick={prevChapter}
+                  disabled={currentChapterIndex <= 1}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-ink-200/60 text-xs font-semibold hover:bg-ink-100/50 disabled:opacity-30 disabled:pointer-events-none transition"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  <span>Chương trước</span>
+                </button>
 
-              <button
-                onClick={() => setChapterIndex((i) => Math.min(totalChapters, i + 1))}
-                disabled={chapterIndex >= totalChapters}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold shadow-xs disabled:opacity-40 disabled:pointer-events-none transition"
-              >
-                <span>Chương sau</span>
-                <ChevronRight className="w-4 h-4" />
-              </button>
+                <span className="text-xs font-mono opacity-60">
+                  {currentChapterIndex} / {totalChapters}
+                </span>
+
+                <button
+                  onClick={nextChapter}
+                  disabled={currentChapterIndex >= totalChapters}
+                  className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold shadow-xs disabled:opacity-30 disabled:pointer-events-none transition"
+                >
+                  <span>Chương sau</span>
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </article>
         ) : null}
       </main>
     </div>
+  );
+};
+
+export const BetaReaderView: React.FC<BetaReaderViewContentProps> = (props) => {
+  return (
+    <ReaderProvider>
+      <BetaReaderViewContent {...props} />
+    </ReaderProvider>
   );
 };

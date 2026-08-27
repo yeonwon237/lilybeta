@@ -1,7 +1,19 @@
--- LilyBeta Phase 1: Supabase / PostgreSQL Schema with RLS Policies
+-- =============================================================================
+-- LilyBeta Phase 2: Supabase / PostgreSQL Production Schema & RLS Policies
 -- Domain target: beta.lilyhub.top
+--
+-- Execution Order:
+-- 1. CREATE EXTENSION & TABLES (in strict foreign key dependency order)
+-- 2. CREATE INDEXES
+-- 3. ENABLE ROW LEVEL SECURITY (RLS)
+-- 4. CREATE RLS POLICIES (safe because all referenced tables already exist)
+-- =============================================================================
 
--- 1. Profiles
+-- =============================================================================
+-- 1. TABLES
+-- =============================================================================
+
+-- 1.1 Profiles
 CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   username TEXT UNIQUE NOT NULL,
@@ -12,22 +24,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
-
--- Profiles Policies
-CREATE POLICY "Admins can view all profiles"
-  ON public.profiles FOR SELECT
-  USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
-
-CREATE POLICY "Users can view own profile"
-  ON public.profiles FOR SELECT
-  USING (id = auth.uid() AND is_active = TRUE);
-
-CREATE POLICY "Admins can insert or update profiles"
-  ON public.profiles FOR ALL
-  USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
-
--- 2. Beta Books
+-- 1.2 Beta Books
 CREATE TABLE IF NOT EXISTS public.beta_books (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   title TEXT NOT NULL,
@@ -44,28 +41,7 @@ CREATE TABLE IF NOT EXISTS public.beta_books (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-ALTER TABLE public.beta_books ENABLE ROW LEVEL SECURITY;
-
--- Beta Books Policies:
--- Admins: can do everything.
-CREATE POLICY "Admins full access to beta_books"
-  ON public.beta_books FOR ALL
-  USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
-
--- Beta Readers: can only SELECT books assigned to them!
-CREATE POLICY "Beta Readers can only view assigned books"
-  ON public.beta_books FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.beta_assignments
-      WHERE beta_assignments.book_id = public.beta_books.id
-        AND beta_assignments.beta_user_id = auth.uid()
-        AND beta_assignments.status = 'ACTIVE'
-    )
-    AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
-  );
-
--- 3. Beta Chapters
+-- 1.3 Beta Chapters
 CREATE TABLE IF NOT EXISTS public.beta_chapters (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   book_id UUID NOT NULL REFERENCES public.beta_books(id) ON DELETE CASCADE,
@@ -78,16 +54,157 @@ CREATE TABLE IF NOT EXISTS public.beta_chapters (
   UNIQUE(book_id, chapter_index)
 );
 
-ALTER TABLE public.beta_chapters ENABLE ROW LEVEL SECURITY;
+-- 1.4 Beta Assignments (Supports multi-assignment per book)
+CREATE TABLE IF NOT EXISTS public.beta_assignments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  book_id UUID NOT NULL REFERENCES public.beta_books(id) ON DELETE CASCADE,
+  beta_user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  assigned_by UUID NOT NULL REFERENCES public.profiles(id),
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE', 'COMPLETED', 'REVOKED')),
+  UNIQUE(book_id, beta_user_id)
+);
 
--- Beta Chapters Policies:
--- Admins: full access
+-- 1.5 Beta Assignment Progress (Overall book reading position & completion count)
+CREATE TABLE IF NOT EXISTS public.beta_assignment_progress (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  assignment_id UUID NOT NULL REFERENCES public.beta_assignments(id) ON DELETE CASCADE,
+  book_id UUID NOT NULL REFERENCES public.beta_books(id) ON DELETE CASCADE,
+  beta_user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  current_chapter_index INTEGER NOT NULL DEFAULT 1,
+  overall_percentage REAL NOT NULL DEFAULT 0,
+  completed_chapters_count INTEGER NOT NULL DEFAULT 0,
+  last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(book_id, beta_user_id)
+);
+
+-- 1.6 Beta Chapter Status (Individual chapter workflow lifecycle)
+CREATE TABLE IF NOT EXISTS public.beta_chapter_status (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  assignment_id UUID NOT NULL REFERENCES public.beta_assignments(id) ON DELETE CASCADE,
+  book_id UUID NOT NULL REFERENCES public.beta_books(id) ON DELETE CASCADE,
+  chapter_id UUID REFERENCES public.beta_chapters(id) ON DELETE CASCADE,
+  chapter_index INTEGER NOT NULL,
+  beta_user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'NOT_STARTED' CHECK(status IN ('NOT_STARTED', 'IN_PROGRESS', 'READY', 'COMPLETED')),
+  started_at TIMESTAMPTZ,
+  ready_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  last_scroll_percent REAL NOT NULL DEFAULT 0,
+  last_scroll_offset REAL NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(assignment_id, chapter_index)
+);
+
+-- 1.7 Beta Activity Logs
+CREATE TABLE IF NOT EXISTS public.beta_activity_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES public.profiles(id),
+  action TEXT NOT NULL,
+  book_id UUID,
+  chapter_id UUID,
+  details JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 1.8 Phase 3 Ready Tables: Edits, Revisions, Notes
+CREATE TABLE IF NOT EXISTS public.beta_edits (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  book_id UUID NOT NULL REFERENCES public.beta_books(id) ON DELETE CASCADE,
+  chapter_id UUID NOT NULL REFERENCES public.beta_chapters(id) ON DELETE CASCADE,
+  beta_user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  paragraph_index INTEGER NOT NULL,
+  original_text TEXT NOT NULL,
+  proposed_text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'ACCEPTED', 'REJECTED')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.beta_revisions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  edit_id UUID NOT NULL REFERENCES public.beta_edits(id) ON DELETE CASCADE,
+  reviewer_id UUID NOT NULL REFERENCES public.profiles(id),
+  comment TEXT,
+  status TEXT NOT NULL CHECK(status IN ('ACCEPTED', 'REJECTED')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.beta_notes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  book_id UUID NOT NULL REFERENCES public.beta_books(id) ON DELETE CASCADE,
+  chapter_id UUID NOT NULL REFERENCES public.beta_chapters(id) ON DELETE CASCADE,
+  beta_user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  paragraph_index INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- =============================================================================
+-- 2. INDEXES
+-- =============================================================================
+CREATE INDEX IF NOT EXISTS idx_profiles_username ON public.profiles(username);
+CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
+CREATE INDEX IF NOT EXISTS idx_beta_books_status ON public.beta_books(status);
+CREATE INDEX IF NOT EXISTS idx_beta_chapters_book_idx ON public.beta_chapters(book_id, chapter_index);
+CREATE INDEX IF NOT EXISTS idx_beta_assignments_user_status ON public.beta_assignments(beta_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_beta_assignments_book_status ON public.beta_assignments(book_id, status);
+CREATE INDEX IF NOT EXISTS idx_beta_assignment_progress_user ON public.beta_assignment_progress(beta_user_id, book_id);
+CREATE INDEX IF NOT EXISTS idx_beta_chapter_status_assign ON public.beta_chapter_status(assignment_id, chapter_index);
+CREATE INDEX IF NOT EXISTS idx_beta_activity_user ON public.beta_activity_logs(user_id);
+
+-- =============================================================================
+-- 3. ENABLE ROW LEVEL SECURITY (RLS)
+-- =============================================================================
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.beta_books ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.beta_chapters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.beta_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.beta_assignment_progress ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.beta_chapter_status ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.beta_activity_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.beta_edits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.beta_revisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.beta_notes ENABLE ROW LEVEL SECURITY;
+
+-- =============================================================================
+-- 4. ROW LEVEL SECURITY POLICIES
+-- =============================================================================
+
+-- 4.1 Profiles Policies
+CREATE POLICY "Admins full access to profiles"
+  ON public.profiles FOR ALL
+  USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
+
+CREATE POLICY "Users view own profile"
+  ON public.profiles FOR SELECT
+  USING (id = auth.uid() AND is_active = TRUE);
+
+-- 4.2 Beta Books Policies
+CREATE POLICY "Admins full access to beta_books"
+  ON public.beta_books FOR ALL
+  USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
+
+CREATE POLICY "Beta Readers view only actively assigned books"
+  ON public.beta_books FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.beta_assignments
+      WHERE beta_assignments.book_id = public.beta_books.id
+        AND beta_assignments.beta_user_id = auth.uid()
+        AND beta_assignments.status = 'ACTIVE'
+    )
+    AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
+  );
+
+-- 4.3 Beta Chapters Policies
 CREATE POLICY "Admins full access to beta_chapters"
   ON public.beta_chapters FOR ALL
   USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
 
--- Beta Readers: can only SELECT chapters belonging to books assigned to them!
-CREATE POLICY "Beta Readers can only view assigned chapters"
+CREATE POLICY "Beta Readers view only chapters of actively assigned books"
   ON public.beta_chapters FOR SELECT
   USING (
     EXISTS (
@@ -99,70 +216,87 @@ CREATE POLICY "Beta Readers can only view assigned chapters"
     AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
   );
 
--- 4. Beta Assignments
-CREATE TABLE IF NOT EXISTS public.beta_assignments (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  book_id UUID NOT NULL REFERENCES public.beta_books(id) ON DELETE CASCADE,
-  beta_user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  assigned_by UUID NOT NULL REFERENCES public.profiles(id),
-  assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE', 'COMPLETED', 'REVOKED')),
-  UNIQUE(book_id, beta_user_id)
-);
-
-ALTER TABLE public.beta_assignments ENABLE ROW LEVEL SECURITY;
-
+-- 4.4 Beta Assignments Policies
 CREATE POLICY "Admins full access to beta_assignments"
   ON public.beta_assignments FOR ALL
   USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
 
-CREATE POLICY "Beta Readers can view own assignments"
+CREATE POLICY "Beta Readers view own assignments"
   ON public.beta_assignments FOR SELECT
   USING (beta_user_id = auth.uid());
 
--- 5. Beta Chapter Progress
-CREATE TABLE IF NOT EXISTS public.beta_chapter_progress (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  assignment_id UUID NOT NULL REFERENCES public.beta_assignments(id) ON DELETE CASCADE,
-  book_id UUID NOT NULL REFERENCES public.beta_books(id) ON DELETE CASCADE,
-  chapter_id UUID REFERENCES public.beta_chapters(id) ON DELETE CASCADE,
-  beta_user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  status TEXT NOT NULL DEFAULT 'IN_PROGRESS' CHECK(status IN ('NOT_STARTED', 'IN_PROGRESS', 'READY', 'COMPLETED')),
-  chapter_index INTEGER NOT NULL DEFAULT 1,
-  scroll_percent REAL DEFAULT 0,
-  scroll_offset REAL DEFAULT 0,
-  percentage REAL DEFAULT 0,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(book_id, beta_user_id)
-);
-
-ALTER TABLE public.beta_chapter_progress ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Admins full access to beta_chapter_progress"
-  ON public.beta_chapter_progress FOR ALL
+-- 4.5 Beta Assignment Progress Policies (Strict Active Assignment Validation)
+CREATE POLICY "Admins full access to beta_assignment_progress"
+  ON public.beta_assignment_progress FOR ALL
   USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
 
-CREATE POLICY "Beta Readers manage own progress"
-  ON public.beta_chapter_progress FOR ALL
-  USING (beta_user_id = auth.uid());
+CREATE POLICY "Beta Readers manage progress only on actively assigned books"
+  ON public.beta_assignment_progress FOR ALL
+  USING (
+    beta_user_id = auth.uid()
+    AND EXISTS (
+      SELECT 1 FROM public.beta_assignments
+      WHERE beta_assignments.id = public.beta_assignment_progress.assignment_id
+        AND beta_assignments.book_id = public.beta_assignment_progress.book_id
+        AND beta_assignments.beta_user_id = auth.uid()
+        AND beta_assignments.status = 'ACTIVE'
+    )
+    AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
+  )
+  WITH CHECK (
+    beta_user_id = auth.uid()
+    AND EXISTS (
+      SELECT 1 FROM public.beta_assignments
+      WHERE beta_assignments.id = public.beta_assignment_progress.assignment_id
+        AND beta_assignments.book_id = public.beta_assignment_progress.book_id
+        AND beta_assignments.beta_user_id = auth.uid()
+        AND beta_assignments.status = 'ACTIVE'
+    )
+    AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
+  );
 
--- 6. Beta Activity Logs
-CREATE TABLE IF NOT EXISTS public.beta_activity_logs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES public.profiles(id),
-  action TEXT NOT NULL,
-  book_id UUID,
-  chapter_id UUID,
-  details JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+-- 4.6 Beta Chapter Status Policies (Strict Chapter & Assignment Integrity)
+CREATE POLICY "Admins full access to beta_chapter_status"
+  ON public.beta_chapter_status FOR ALL
+  USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
 
-ALTER TABLE public.beta_activity_logs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Beta Readers manage chapter status only for active assignment"
+  ON public.beta_chapter_status FOR ALL
+  USING (
+    beta_user_id = auth.uid()
+    AND EXISTS (
+      SELECT 1 FROM public.beta_assignments
+      WHERE beta_assignments.id = public.beta_chapter_status.assignment_id
+        AND beta_assignments.book_id = public.beta_chapter_status.book_id
+        AND beta_assignments.beta_user_id = auth.uid()
+        AND beta_assignments.status = 'ACTIVE'
+    )
+    AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
+  )
+  WITH CHECK (
+    beta_user_id = auth.uid()
+    AND EXISTS (
+      SELECT 1 FROM public.beta_assignments
+      WHERE beta_assignments.id = public.beta_chapter_status.assignment_id
+        AND beta_assignments.book_id = public.beta_chapter_status.book_id
+        AND beta_assignments.beta_user_id = auth.uid()
+        AND beta_assignments.status = 'ACTIVE'
+    )
+    AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
+    AND (
+      chapter_id IS NULL OR EXISTS (
+        SELECT 1 FROM public.beta_chapters
+        WHERE beta_chapters.id = public.beta_chapter_status.chapter_id
+          AND beta_chapters.book_id = public.beta_chapter_status.book_id
+      )
+    )
+  );
 
-CREATE POLICY "Admins can view activity logs"
+-- 4.7 Beta Activity Logs Policies
+CREATE POLICY "Admins view all activity logs"
   ON public.beta_activity_logs FOR SELECT
   USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
 
-CREATE POLICY "Authenticated users can insert activity logs"
+CREATE POLICY "Users insert own activity logs"
   ON public.beta_activity_logs FOR INSERT
   WITH CHECK (user_id = auth.uid());

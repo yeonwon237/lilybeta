@@ -37,8 +37,10 @@ export const createApp = () => {
   // Books / Reader routes (Secured against IDOR)
   app.get('/api/books', requireAuth, bookController.listBooks);
   app.get('/api/books/:id', requireAuth, requireBookAccess, bookController.getBook);
+  app.get('/api/books/:id/workflow', requireAuth, requireBookAccess, bookController.getChapterWorkflow);
   app.get('/api/books/:id/chapters', requireAuth, requireBookAccess, bookController.getChapterList);
   app.get('/api/books/:id/chapters/:index', requireAuth, requireBookAccess, bookController.getChapter);
+  app.post('/api/books/:id/chapters/:index/complete', requireAuth, requireBookAccess, bookController.completeChapter);
   app.get('/api/books/:id/progress', requireAuth, requireBookAccess, bookController.getProgress);
   app.post('/api/books/:id/progress', requireAuth, requireBookAccess, bookController.saveProgress);
 

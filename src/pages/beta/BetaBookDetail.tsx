@@ -145,9 +145,9 @@ export const BetaBookDetail: React.FC<BetaBookDetailProps> = ({ bookId, onBack, 
             </div>
 
             {/* Progress status */}
-            <div className="p-4 rounded-2xl bg-ink-50/60 border border-ink-100/60 space-y-2">
+            <div className="p-4 rounded-2xl bg-ink-50/60 border border-ink-100/60 space-y-2.5">
               <div className="flex justify-between text-xs text-ink-600">
-                <span>Đang đọc: Chương {currentChapterIndex}/{book.totalChapters}</span>
+                <span>Tiến độ Beta: <strong className="text-purple-900">{book.completedChaptersCount || 0}/{book.totalChapters} chương</strong></span>
                 <span className="font-mono font-semibold text-purple-700">
                   {Math.round(book.progressPercent || 0)}%
                 </span>
@@ -157,6 +157,11 @@ export const BetaBookDetail: React.FC<BetaBookDetailProps> = ({ bookId, onBack, 
                   className="h-full bg-purple-600 rounded-full transition-all duration-300"
                   style={{ width: `${Math.min(100, Math.max(0, book.progressPercent || 0))}%` }}
                 />
+              </div>
+              <div className="flex items-center gap-3 text-[11px] text-ink-500 pt-1">
+                <span>Hoàn thành: <strong className="text-emerald-700 font-mono">{book.completedChaptersCount || 0}</strong></span>
+                <span>·</span>
+                <span>Còn lại: <strong className="text-ink-700 font-mono">{Math.max(0, book.totalChapters - (book.completedChaptersCount || 0))}</strong> chương</span>
               </div>
             </div>
 
@@ -181,6 +186,8 @@ export const BetaBookDetail: React.FC<BetaBookDetailProps> = ({ bookId, onBack, 
           <div className="divide-y divide-ink-100 text-sm">
             {chapters.map((ch) => {
               const isCurrent = ch.index === currentChapterIndex;
+              const isCompleted = ch.status === 'COMPLETED';
+
               return (
                 <div
                   key={ch.index}
@@ -196,7 +203,12 @@ export const BetaBookDetail: React.FC<BetaBookDetailProps> = ({ bookId, onBack, 
                     <span className={`font-medium line-clamp-1 ${isCurrent ? 'text-purple-800 font-semibold' : 'text-ink-800'}`}>
                       {ch.title}
                     </span>
-                    {isCurrent && (
+                    {isCompleted && (
+                      <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 shrink-0">
+                        Đã beta
+                      </span>
+                    )}
+                    {isCurrent && !isCompleted && (
                       <span className="text-[10px] uppercase font-bold font-mono px-2 py-0.5 rounded bg-purple-200/70 text-purple-900 shrink-0">
                         Đang đọc
                       </span>
@@ -205,7 +217,7 @@ export const BetaBookDetail: React.FC<BetaBookDetailProps> = ({ bookId, onBack, 
 
                   <div className="flex items-center gap-4 text-xs text-ink-400 shrink-0 ml-4">
                     <span className="font-mono">{ch.wordCount.toLocaleString('vi-VN')} chữ</span>
-                    {ch.isRead ? (
+                    {isCompleted ? (
                       <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                     ) : (
                       <div className="w-4 h-4 rounded-full border border-ink-200" />

@@ -59,11 +59,58 @@ export class BetaCloudBookSource implements BookSource {
   }
 
   /**
-   * Get Table of Contents for a book.
+   * Get Table of Contents for a book with workflow status.
    */
-  public async getChapterList(bookId: string): Promise<Array<{ index: number; title: string; wordCount: number; isRead: boolean; isCurrent: boolean }>> {
-    const res = await api.get<{ chapters: Array<{ index: number; title: string; wordCount: number; isRead: boolean; isCurrent: boolean }> }>(`/books/${bookId}/chapters`);
+  public async getChapterList(bookId: string): Promise<Array<{ 
+    index: number; 
+    title: string; 
+    wordCount: number; 
+    isRead: boolean; 
+    isCurrent: boolean;
+    status?: string;
+    completedAt?: string;
+  }>> {
+    const res = await api.get<{ chapters: any[] }>(`/books/${bookId}/chapters`);
     return res.chapters || [];
+  }
+
+  /**
+   * Mark chapter as completed by Beta Reader.
+   */
+  public async completeChapter(bookId: string, chapterIndex: number): Promise<{
+    completed: boolean;
+    status: string;
+    completedAt: string;
+    completedChaptersCount: number;
+    totalChapters: number;
+    overallPercentage: number;
+  }> {
+    const res = await api.post<any>(`/books/${bookId}/chapters/${chapterIndex}/complete`);
+    return {
+      completed: true,
+      status: res.status,
+      completedAt: res.completedAt,
+      completedChaptersCount: res.completedChaptersCount,
+      totalChapters: res.totalChapters,
+      overallPercentage: res.overallPercentage,
+    };
+  }
+
+  /**
+   * Get workflow statuses for all chapters of a book.
+   */
+  public async getChapterWorkflow(bookId: string): Promise<Record<number, {
+    status: string;
+    startedAt?: string;
+    completedAt?: string;
+    lastScrollPercent?: number;
+  }>> {
+    try {
+      const res = await api.get<{ workflow: Record<number, any> }>(`/books/${bookId}/workflow`);
+      return res.workflow || {};
+    } catch {
+      return {};
+    }
   }
 
   /**

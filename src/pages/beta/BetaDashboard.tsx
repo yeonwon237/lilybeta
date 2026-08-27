@@ -148,10 +148,10 @@ export const BetaDashboard: React.FC<BetaDashboardProps> = ({ onSelectBook }) =>
 
                     <p className="text-xs text-ink-500 line-clamp-1 italic">{b.author}</p>
 
-                    {/* Reading Progress */}
+                    {/* Beta Workflow Progress */}
                     <div className="pt-2 space-y-1">
                       <div className="flex justify-between text-[11px] text-ink-500">
-                        <span>Tiến độ: Chương {b.currentChapter || 1}/{b.totalChapters}</span>
+                        <span>Đã beta: <strong className="text-purple-900 font-semibold">{b.completedChaptersCount || 0}/{b.totalChapters} chương</strong></span>
                         <span className="font-medium font-mono text-purple-700">
                           {Math.round(b.progressPercent || 0)}%
                         </span>
@@ -161,6 +161,9 @@ export const BetaDashboard: React.FC<BetaDashboardProps> = ({ onSelectBook }) =>
                           className="h-full bg-purple-600 rounded-full transition-all duration-300"
                           style={{ width: `${Math.min(100, Math.max(0, b.progressPercent || 0))}%` }}
                         />
+                      </div>
+                      <div className="text-[10px] text-ink-400 font-mono flex justify-between pt-0.5">
+                        <span>Đang đọc: Chương {b.currentChapter || 1}</span>
                       </div>
                     </div>
                   </div>

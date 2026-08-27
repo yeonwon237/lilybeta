@@ -2,7 +2,14 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { queryOne } from '../db/database.js';
 
-export const JWT_SECRET = process.env.JWT_SECRET || 'lilybeta-super-secret-key-change-in-production';
+const isProduction = process.env.NODE_ENV === 'production';
+const envSecret = process.env.JWT_SECRET;
+
+if (isProduction && (!envSecret || envSecret === 'lilybeta-super-secret-key-change-in-production')) {
+  throw new Error('FATAL SECURITY ERROR: In production mode, JWT_SECRET must be explicitly configured with a strong secret key.');
+}
+
+export const JWT_SECRET = envSecret || 'lilybeta-super-secret-key-change-in-production';
 
 export interface AuthenticatedUser {
   id: string;
@@ -71,7 +78,7 @@ export const requireAdmin = (req: Request, res: Response, next: NextFunction): v
 
 /**
  * IDOR Defense Firewall:
- * Ensures only ADMIN or explicitly assigned BETA_READER can access book/chapter data.
+ * Ensures only ADMIN or explicitly assigned BETA_READER with ACTIVE assignment can access book/chapter data.
  */
 export const requireBookAccess = (req: Request, res: Response, next: NextFunction): void => {
   if (!req.user) {
@@ -91,7 +98,7 @@ export const requireBookAccess = (req: Request, res: Response, next: NextFunctio
     return;
   }
 
-  // Check assignment strictly in database
+  // Check assignment strictly in database with status ACTIVE
   const assignment = queryOne(
     'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
     bookId,
@@ -101,7 +108,7 @@ export const requireBookAccess = (req: Request, res: Response, next: NextFunctio
 
   if (!assignment) {
     res.status(403).json({ 
-      error: 'Truy cập bị từ chối: Bạn không được phân công tác phẩm này.',
+      error: 'Truy cập bị từ chối: Bạn không có phân công hoạt động đối với tác phẩm này.',
       code: 'FORBIDDEN_BOOK_ACCESS'
     });
     return;

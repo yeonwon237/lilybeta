@@ -12,6 +12,19 @@ export interface User {
 
 export type BookStatus = 'DRAFT' | 'ASSIGNED' | 'IN_BETA' | 'BETA_COMPLETE' | 'ARCHIVED';
 
+export interface BookAssignmentInfo {
+  id: string;
+  betaUserId: string;
+  username: string;
+  displayName: string;
+  assignedAt: string;
+  status: string;
+  completedChaptersCount?: number;
+  currentChapterIndex?: number;
+  overallPercentage?: number;
+  lastReadAt?: string;
+}
+
 export interface Book {
   id: string;
   title: string;
@@ -27,21 +40,19 @@ export interface Book {
   createdAt: string;
   updatedAt: string;
   
-  // Reading metadata
+  // Reading & Workflow metadata
   currentChapter?: number;
   currentChapterTitle?: string;
   progressPercent?: number;
+  completedChaptersCount?: number;
   lastReadAt?: string;
 
-  // Assignment info (if loaded in view)
-  assignedTo?: {
-    id: string;
-    username: string;
-    displayName: string;
-    assignedAt: string;
-    status: string;
-  } | null;
+  // Assignment info
+  assignments?: BookAssignmentInfo[];
+  assignedTo?: BookAssignmentInfo | null;
 }
+
+export type ChapterWorkflowStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'READY' | 'COMPLETED';
 
 export interface Chapter {
   id: string;
@@ -52,6 +63,10 @@ export interface Chapter {
   paragraphs?: string[];
   isRead?: boolean;
   isCurrent?: boolean;
+  status?: ChapterWorkflowStatus;
+  startedAt?: string;
+  completedAt?: string;
+  lastScrollPercent?: number;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -76,7 +91,7 @@ export interface ChapterProgress {
   bookId: string;
   chapterId?: string;
   betaUserId: string;
-  status: 'NOT_STARTED' | 'IN_PROGRESS' | 'READY' | 'COMPLETED';
+  status: ChapterWorkflowStatus;
   chapterIndex: number;
   scrollPercent: number;
   scrollOffset?: number;
@@ -87,7 +102,7 @@ export interface ChapterProgress {
 export interface ActivityLog {
   id: string;
   userId: string;
-  action: 'LOGIN' | 'BOOK_CREATED' | 'BOOK_ASSIGNED' | 'BOOK_OPENED' | 'CHAPTER_OPENED';
+  action: 'LOGIN' | 'BOOK_CREATED' | 'BOOK_ASSIGNED' | 'BOOK_OPENED' | 'CHAPTER_OPENED' | 'CHAPTER_COMPLETED';
   bookId?: string;
   chapterId?: string;
   details?: string;
@@ -95,4 +110,42 @@ export interface ActivityLog {
   userName?: string;
   userDisplayName?: string;
   bookTitle?: string;
+}
+
+// Reader Theme & Typography Types
+export type ReaderFontFamily = 
+  | 'Literata' 
+  | 'Merriweather' 
+  | 'Playfair Display' 
+  | 'Be Vietnam Pro' 
+  | 'Inter';
+
+export type ReaderPageWidth = 'narrow' | 'normal' | 'wide' | 'full';
+
+export type ReadingMode = 'scroll' | 'page';
+
+export type ReadingPresetId = 'thoai-mai' | 'gon-gang' | 'sach-giay' | 'doc-dem';
+
+export interface ReaderThemeOption {
+  id: string;
+  name: string;
+  className: string;
+  previewBg: string;
+  previewText: string;
+  description?: string;
+}
+
+export interface ReaderSettings {
+  fontFamily: ReaderFontFamily;
+  fontSize: number; // 14 to 32
+  fontWeight: 'normal' | 'medium' | 'semibold';
+  lineHeight: number; // 1.4 to 2.4
+  paragraphSpacing: number; // 0.6 to 2.4
+  pageWidth: ReaderPageWidth;
+  marginHorizontal: number; // 12 to 48px
+  textAlign: 'left' | 'justify';
+  firstLineIndent: boolean;
+  readingMode: ReadingMode;
+  activeThemeId: string;
+  selectedPreset?: string;
 }

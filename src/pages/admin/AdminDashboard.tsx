@@ -286,22 +286,48 @@ export const AdminDashboard: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Assignment status */}
-                    <div className="pt-3 border-t border-ink-100/60 flex items-center justify-between text-xs">
-                      {b.assignedTo ? (
-                        <div className="flex items-center gap-1.5 text-ink-700">
-                          <span className="text-[11px] text-ink-400">Phụ trách:</span>
-                          <span className="font-semibold text-lily-800 line-clamp-1">
-                            {b.assignedTo.displayName}
-                          </span>
+                    {/* Assignment status & progress */}
+                    <div className="pt-3 border-t border-ink-100/60 space-y-2 text-xs">
+                      {b.assignments && b.assignments.length > 0 ? (
+                        <div className="space-y-1.5">
+                          {b.assignments.map((a) => (
+                            <div key={a.id} className="p-2 rounded-xl bg-ink-50/70 border border-ink-100/50 flex flex-col gap-1">
+                              <div className="flex items-center justify-between">
+                                <span className="font-semibold text-lily-800 line-clamp-1">
+                                  {a.displayName} <span className="font-normal text-[10px] text-ink-400 font-mono">(@{a.username})</span>
+                                </span>
+                                <button
+                                  onClick={() => handleRevokeAssignment(b.id, a.betaUserId)}
+                                  className="p-1 text-ink-400 hover:text-rose-600 rounded-md"
+                                  title="Hủy phân công"
+                                >
+                                  <UserX className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+
+                              <div className="flex items-center justify-between text-[11px] text-ink-600">
+                                <span>Tiến độ: <strong className="text-purple-900 font-mono">{a.completedChaptersCount || 0}/{b.totalChapters}</strong> ({Math.round(a.overallPercentage || 0)}%)</span>
+                                <span className="text-[10px] font-mono text-ink-500">Đang ở chương {a.currentChapterIndex || 1}</span>
+                              </div>
+
+                              <div className="w-full h-1 bg-ink-200/60 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-purple-600 rounded-full"
+                                  style={{ width: `${Math.min(100, Math.max(0, a.overallPercentage || 0))}%` }}
+                                />
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       ) : (
-                        <span className="text-[11px] text-amber-700 font-medium bg-amber-50 px-2 py-0.5 rounded">
-                          Chưa phân công
-                        </span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-amber-700 font-medium bg-amber-50 px-2 py-0.5 rounded">
+                            Chưa phân công
+                          </span>
+                        </div>
                       )}
 
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center justify-between pt-1">
                         <button
                           onClick={() => setAssignModal({
                             isOpen: true,
@@ -311,18 +337,8 @@ export const AdminDashboard: React.FC = () => {
                           })}
                           className="px-2.5 py-1 text-[11px] font-semibold bg-lily-50 text-lily-700 hover:bg-lily-100 rounded-lg transition"
                         >
-                          {b.assignedTo ? 'Đổi người' : 'Giao truyện'}
+                          {b.assignments && b.assignments.length > 0 ? '+ Giao thêm người' : 'Giao truyện'}
                         </button>
-
-                        {b.assignedTo && (
-                          <button
-                            onClick={() => handleRevokeAssignment(b.id, b.assignedTo!.id)}
-                            className="p-1 text-ink-400 hover:text-rose-600 rounded-md"
-                            title="Hủy phân công"
-                          >
-                            <UserX className="w-3.5 h-3.5" />
-                          </button>
-                        )}
 
                         <button
                           onClick={() => handleDeleteBook(b.id, b.title)}

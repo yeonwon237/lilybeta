@@ -11,9 +11,20 @@ export const runMigrations = async () => {
   db.exec(sql);
   console.log('[LilyBeta Migration] Schema initialized successfully.');
 
-  // Seed default Admin if not present
+  // Check Admin Seed Security
+  const isProduction = process.env.NODE_ENV === 'production';
+  const allowBootstrap = process.env.BOOTSTRAP_ADMIN === 'true';
+
   const admin = queryOne('SELECT id FROM profiles WHERE role = ?', 'ADMIN');
   if (!admin) {
+    if (isProduction && !allowBootstrap) {
+      console.warn(
+        '[LilyBeta Seed] PRODUCTION MODE: Default admin account creation is DISABLED. ' +
+        'Set BOOTSTRAP_ADMIN=true to seed initial admin or create via administrative script.'
+      );
+      return;
+    }
+
     const adminId = 'admin-root-id';
     const username = 'admin';
     const password = 'admin123456';
@@ -33,7 +44,7 @@ export const runMigrations = async () => {
       now
     );
 
-    console.log('[LilyBeta Seed] Created default admin account:');
+    console.log('[LilyBeta Seed] Created development admin account:');
     console.log('   Username: admin');
     console.log('   Password: admin123456');
   }

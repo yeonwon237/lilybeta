@@ -13,6 +13,13 @@
     --luxury-wine: #7d2949;
     --luxury-gold: #b89456;
     --luxury-ink: #211b19;
+
+    /* Default Reader Theme (Paper) */
+    --reader-bg: #F8F5EC;
+    --reader-text: #2B2621;
+    --reader-muted: #796E63;
+    --reader-border: #E8E0D2;
+    --reader-accent: #C74A7C;
   }
   
   html, body, #root {
@@ -37,3 +44,146 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 
 ::selection { background: #fceef4; color: #752a47; }
+
+/* ==========================================================================
+   12 AUTHENTIC LILY READER THEMES
+   ========================================================================== */
+.reader-theme-white {
+  --reader-bg: #FFFFFF;
+  --reader-text: #1F1C18;
+  --reader-muted: #776D61;
+  --reader-border: #EAE5DE;
+  --reader-accent: #C74A7C;
+}
+
+.reader-theme-cream {
+  --reader-bg: #FAF7F0;
+  --reader-text: #2C261F;
+  --reader-muted: #796F63;
+  --reader-border: #E6DFD3;
+  --reader-accent: #C74A7C;
+}
+
+.reader-theme-paper {
+  --reader-bg: #F8F5EC;
+  --reader-text: #2B2621;
+  --reader-muted: #796E63;
+  --reader-border: #E8E0D2;
+  --reader-accent: #C74A7C;
+}
+
+.reader-theme-gray {
+  --reader-bg: #ECEEEF;
+  --reader-text: #202326;
+  --reader-muted: #666E75;
+  --reader-border: #D4D8DB;
+  --reader-accent: #5E554B;
+}
+
+.reader-theme-night {
+  --reader-bg: #1A1A1D;
+  --reader-text: #D0D0D5;
+  --reader-muted: #7B7B85;
+  --reader-border: #2D2D33;
+  --reader-accent: #EB94BA;
+}
+
+.reader-theme-lily {
+  --reader-bg: #FCF4F7;
+  --reader-text: #2D1E26;
+  --reader-muted: #8F6A7A;
+  --reader-border: #F3DCE5;
+  --reader-accent: #C74A7C;
+}
+
+.reader-theme-warm {
+  --reader-bg: #FAF2E6;
+  --reader-text: #362A1F;
+  --reader-muted: #8A725D;
+  --reader-border: #EBDDC8;
+  --reader-accent: #B0743B;
+}
+
+.reader-theme-matcha {
+  --reader-bg: #F0F4ED;
+  --reader-text: #1E2B1F;
+  --reader-muted: #5F7361;
+  --reader-border: #D8E2D3;
+  --reader-accent: #4A7C59;
+}
+
+.reader-theme-moon {
+  --reader-bg: #22252A;
+  --reader-text: #DCE0E6;
+  --reader-muted: #88909E;
+  --reader-border: #353A42;
+  --reader-accent: #9FB8DD;
+}
+
+.reader-theme-oled {
+  --reader-bg: #000000;
+  --reader-text: #CFCFCF;
+  --reader-muted: #6E6E6E;
+  --reader-border: #222222;
+  --reader-accent: #EB94BA;
+}
+
+.reader-theme-vintage {
+  --reader-bg: #EAE1D2;
+  --reader-text: #2A241C;
+  --reader-muted: #766958;
+  --reader-border: #D5C9B5;
+  --reader-accent: #8C5332;
+}
+
+.reader-theme-ancient {
+  --reader-bg: #382F28;
+  --reader-text: #E5DCD1;
+  --reader-muted: #A89B8D;
+  --reader-border: #4D423A;
+  --reader-accent: #D9A066;
+}
+
+/* ==========================================================================
+   READER TOOLBARS & FLOATING INTERFACES
+   ========================================================================== */
+.reader-toolbar-top,
+.reader-toolbar-bottom {
+  background: rgba(255, 253, 250, 0.92);
+  border: 1px solid rgba(75, 58, 48, 0.12);
+  box-shadow: 0 18px 48px -22px rgba(39, 25, 20, 0.44), inset 0 1px 0 rgba(255,255,255,0.92);
+  backdrop-filter: blur(24px) saturate(135%);
+  color: #302824;
+}
+
+.reader-theme-night .reader-toolbar-top,
+.reader-theme-night .reader-toolbar-bottom,
+.reader-theme-moon .reader-toolbar-top,
+.reader-theme-moon .reader-toolbar-bottom,
+.reader-theme-oled .reader-toolbar-top,
+.reader-theme-oled .reader-toolbar-bottom,
+.reader-theme-ancient .reader-toolbar-top,
+.reader-theme-ancient .reader-toolbar-bottom {
+  background: rgba(30, 29, 31, 0.92);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #EEE8E2;
+}
+
+.reader-prose p {
+  text-wrap: pretty;
+}
+
+/* Subtle Reader Watermark */
+.reader-watermark {
+  user-select: none;
+  pointer-events: none;
+  opacity: 0.08;
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+/* Copy deterrence styling (deterrent, but doesn't break inline selection) */
+.reader-deterrence {
+  -webkit-touch-callout: none;
+}
