@@ -285,7 +285,7 @@ const runEgressTests = async () => {
     );
     assert(statusRow1.status === 'IN_PROGRESS', 'Chapter transitioned to IN_PROGRESS');
 
-    const startLogs = queryAll<any>(
+    const startLogs = await queryAll<any>(
       "SELECT * FROM beta_activity_logs WHERE book_id = ? AND action = 'CHAPTER_STARTED'",
       book.id
     );
@@ -297,7 +297,7 @@ const runEgressTests = async () => {
     });
     assert(openRes2.status === 200, 'Second chapter open returns 200 OK');
 
-    const totalLogsAfter = queryAll<any>(
+    const totalLogsAfter = await queryAll<any>(
       "SELECT * FROM beta_activity_logs WHERE book_id = ? AND user_id = ?",
       book.id,
       betaUser.id

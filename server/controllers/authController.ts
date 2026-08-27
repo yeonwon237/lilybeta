@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import { queryOne, run } from '../db/database.js';
 import { JWT_SECRET } from '../middleware/auth.js';
 
-export const login = (req: Request, res: Response): void => {
+export const login = async (req: Request, res: Response): Promise<void> => {
   const { username, password } = req.body;
 
   if (!username || !password) {
@@ -13,7 +13,7 @@ export const login = (req: Request, res: Response): void => {
   }
 
   const cleanUsername = String(username).trim().toLowerCase();
-  const user = queryOne<any>(
+  const user = await queryOne<any>(
     'SELECT * FROM profiles WHERE lower(username) = ?',
     cleanUsername
   );
@@ -29,7 +29,7 @@ export const login = (req: Request, res: Response): void => {
     return;
   }
 
-  if (user.is_active !== 1) {
+  if (!user.is_active) {
     res.status(403).json({ error: 'Tài khoản của bạn đã bị vô hiệu hóa. Vui lòng liên hệ Quản trị viên.' });
     return;
   }
@@ -43,12 +43,13 @@ export const login = (req: Request, res: Response): void => {
   // Log activity
   try {
     const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    run(
+    const detailsObj = { ip: req.ip, userAgent: req.headers['user-agent'] };
+    await run(
       'INSERT INTO beta_activity_logs (id, user_id, action, details, created_at) VALUES (?, ?, ?, ?, ?)',
       logId,
       user.id,
       'LOGIN',
-      JSON.stringify({ ip: req.ip, userAgent: req.headers['user-agent'] }),
+      JSON.stringify(detailsObj),
       new Date().toISOString()
     );
   } catch (err) {
@@ -68,18 +69,18 @@ export const login = (req: Request, res: Response): void => {
   });
 };
 
-export const me = (req: Request, res: Response): void => {
+export const me = async (req: Request, res: Response): Promise<void> => {
   if (!req.user) {
     res.status(401).json({ error: 'Chưa đăng nhập' });
     return;
   }
 
-  const user = queryOne<any>(
+  const user = await queryOne<any>(
     'SELECT id, username, display_name, role, is_active, created_at, updated_at FROM profiles WHERE id = ?',
     req.user.id
   );
 
-  if (!user || user.is_active !== 1) {
+  if (!user || !user.is_active) {
     res.status(401).json({ error: 'Tài khoản không tồn tại hoặc đã bị vô hiệu hóa' });
     return;
   }

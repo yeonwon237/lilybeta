@@ -1,15 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { queryOne } from '../db/database.js';
+import { config } from '../config.js';
 
-const isProduction = process.env.NODE_ENV === 'production';
-const envSecret = process.env.JWT_SECRET;
-
-if (isProduction && (!envSecret || envSecret === 'lilybeta-super-secret-key-change-in-production')) {
-  throw new Error('FATAL SECURITY ERROR: In production mode, JWT_SECRET must be explicitly configured with a strong secret key.');
-}
-
-export const JWT_SECRET = envSecret || 'lilybeta-super-secret-key-change-in-production';
+export const JWT_SECRET = config.jwtSecret;
 
 export interface AuthenticatedUser {
   id: string;
@@ -27,7 +21,7 @@ declare global {
   }
 }
 
-export const requireAuth = (req: Request, res: Response, next: NextFunction): void => {
+export const requireAuth = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Chưa đăng nhập hoặc thiếu mã xác thực' });
@@ -39,7 +33,7 @@ export const requireAuth = (req: Request, res: Response, next: NextFunction): vo
     const payload = jwt.verify(token, JWT_SECRET) as { id: string; role: string };
     
     // Always query database to verify fresh status and check if account has been disabled
-    const userRow = queryOne<any>(
+    const userRow = await queryOne<any>(
       'SELECT id, username, display_name, role, is_active FROM profiles WHERE id = ?',
       payload.id
     );
@@ -49,7 +43,7 @@ export const requireAuth = (req: Request, res: Response, next: NextFunction): vo
       return;
     }
 
-    if (userRow.is_active !== 1) {
+    if (!userRow.is_active) {
       res.status(401).json({ error: 'Tài khoản đã bị vô hiệu hóa. Vui lòng liên hệ Quản trị viên.' });
       return;
     }
@@ -80,7 +74,7 @@ export const requireAdmin = (req: Request, res: Response, next: NextFunction): v
  * IDOR Defense Firewall:
  * Ensures only ADMIN or explicitly assigned BETA_READER with ACTIVE assignment can access book/chapter data.
  */
-export const requireBookAccess = (req: Request, res: Response, next: NextFunction): void => {
+export const requireBookAccess = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   if (!req.user) {
     res.status(401).json({ error: 'Yêu cầu đăng nhập' });
     return;
@@ -99,7 +93,7 @@ export const requireBookAccess = (req: Request, res: Response, next: NextFunctio
   }
 
   // Check assignment strictly in database with status ACTIVE
-  const assignment = queryOne(
+  const assignment = await queryOne(
     'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
     bookId,
     req.user.id,

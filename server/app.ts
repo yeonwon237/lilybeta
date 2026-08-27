@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { requireAuth, requireAdmin, requireBookAccess } from './middleware/auth.js';
 import * as authController from './controllers/authController.js';
@@ -6,19 +6,55 @@ import * as adminController from './controllers/adminController.js';
 import * as bookController from './controllers/bookController.js';
 import * as editController from './controllers/editController.js';
 import * as reviewController from './controllers/reviewController.js';
+import { isDbAlive, getDatabaseProvider } from './db/database.js';
+import { config } from './config.js';
 
 export const createApp = () => {
   const app = express();
 
-  app.use(cors());
+  // Strict CORS configuration
+  const origin = config.corsOrigin;
+  app.use(cors({
+    origin: origin === '*' ? '*' : origin,
+    credentials: true,
+  }));
+
   // 50mb limit for large parsed book drafts
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-  // Health check
-  app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'LilyBeta Backend', time: new Date().toISOString() });
-  });
+  // Health check endpoints (root and /api paths)
+  const healthHandler = (_req: Request, res: Response) => {
+    res.json({
+      status: 'ok',
+      service: 'LilyBeta Backend',
+      time: new Date().toISOString(),
+    });
+  };
+
+  const dbHealthHandler = async (_req: Request, res: Response) => {
+    try {
+      const alive = await isDbAlive();
+      res.status(alive ? 200 : 503).json({
+        status: alive ? 'ok' : 'degraded',
+        database: alive ? 'connected' : 'disconnected',
+        provider: getDatabaseProvider(),
+        time: new Date().toISOString(),
+      });
+    } catch {
+      res.status(503).json({
+        status: 'error',
+        database: 'disconnected',
+        provider: getDatabaseProvider(),
+        time: new Date().toISOString(),
+      });
+    }
+  };
+
+  app.get('/health', healthHandler);
+  app.get('/api/health', healthHandler);
+  app.get('/health/db', dbHealthHandler);
+  app.get('/api/health/db', dbHealthHandler);
 
   // Auth routes
   app.post('/api/auth/login', authController.login);
@@ -36,6 +72,9 @@ export const createApp = () => {
   app.delete('/api/admin/books/:id/assign/:userId', requireAuth, requireAdmin, adminController.revokeAssignment);
   app.get('/api/admin/logs', requireAuth, requireAdmin, adminController.getActivityLogs);
   app.get('/api/admin/books/:id/edits', requireAuth, requireAdmin, editController.listAdminBookEdits);
+
+  // Phase 5: Book Derived Readiness Endpoint
+  app.get('/api/admin/books/:id/readiness', requireAuth, requireAdmin, adminController.getBookReadiness);
 
   // Phase 4: Admin Review & Chapter Approval routes
   app.get('/api/admin/books/:id/review', requireAuth, requireAdmin, reviewController.getBookReviewOverview);
@@ -68,6 +107,16 @@ export const createApp = () => {
   app.get('/api/books/:id/chapters/:index/notes', requireAuth, requireBookAccess, editController.listChapterNotes);
   app.post('/api/books/:id/chapters/:index/notes', requireAuth, requireBookAccess, editController.createNote);
   app.delete('/api/books/:id/chapters/:index/notes/:noteId', requireAuth, requireBookAccess, editController.deleteNote);
+
+  // Centralized error handler
+  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    console.error('[LilyBeta Uncaught Error]', err);
+    const status = err.status || 500;
+    const message = config.nodeEnv === 'production' && status === 500
+      ? 'Internal server error'
+      : (err.message || 'Lỗi hệ thống');
+    res.status(status).json({ error: message, code: err.code });
+  });
 
   return app;
 };

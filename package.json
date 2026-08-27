@@ -11,6 +11,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "db:migrate": "tsx server/migrations/runner.ts",
+    "db:export-sqlite": "tsx server/migrations/scripts/exportSqlite.ts",
+    "db:import-postgres": "tsx server/migrations/scripts/importPostgres.ts",
     "test:security": "tsx tests/idor-security.test.ts",
     "test:renderer": "tsx tests/working-version-renderer.test.ts",
     "test:migrations": "tsx tests/migrations.test.ts",
@@ -18,7 +20,9 @@
     "test:approved": "tsx tests/approved-version-renderer.test.ts",
     "test:review": "tsx tests/admin-review-security.test.ts",
     "test:egress": "tsx tests/egress-optimization.test.ts",
-    "test": "npm run test:security && npm run test:renderer && npm run test:migrations && npm run test:drafts && npm run test:approved && npm run test:review && npm run test:egress"
+    "test:readiness": "tsx tests/readiness.test.ts",
+    "test:postgres": "tsx tests/postgres-parity.test.ts",
+    "test": "npm run test:security && npm run test:renderer && npm run test:migrations && npm run test:drafts && npm run test:approved && npm run test:review && npm run test:egress && npm run test:readiness"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -27,6 +31,7 @@
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.475.0",
+    "pg": "^8.23.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tailwind-merge": "^3.0.2"
@@ -37,6 +42,7 @@
     "@types/express": "^5.0.0",
     "@types/jsonwebtoken": "^9.0.8",
     "@types/node": "^22.13.10",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",

@@ -4,27 +4,27 @@ import { buildApprovedChapter, checkAcceptedOverlaps, ApprovedVersionConflictErr
 import { AcceptedRevisionItem, ChapterReviewStatus, DerivedReviewStatus } from '../../src/beta-review/reviewTypes.js';
 
 /**
- * Review Controller for LilyBeta Phase 4
+ * Review Controller for LilyBeta Phase 4 & Phase 5
  * 
  * Handles:
- * 1. Overview and aggregation of review statistics per book and assignment.
+ * 1. Overview and aggregation of review statistics per book and assignment (zero N+1 queries).
  * 2. Detailed chapter review payload (Original, Working Version edits, Approved Version).
  * 3. Exact-revision bound edit reviews (Accept, Reject, Request Changes) with stale protection.
  * 4. Chapter approval snapshot creation and invalidation/reopening.
  * 5. Note resolution.
  */
 
-export const getBookReviewOverview = (req: Request, res: Response): void => {
+export const getBookReviewOverview = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params; // bookId
 
-  const book = queryOne<any>('SELECT * FROM beta_books WHERE id = ?', id);
+  const book = await queryOne<any>('SELECT * FROM beta_books WHERE id = ?', id);
   if (!book) {
     res.status(404).json({ error: 'Không tìm thấy tác phẩm' });
     return;
   }
 
   // Fetch all assignments for this book
-  const assignments = queryAll<any>(`
+  const assignments = await queryAll<any>(`
     SELECT 
       ba.id AS assignmentId,
       ba.beta_user_id AS betaUserId,
@@ -41,9 +41,9 @@ export const getBookReviewOverview = (req: Request, res: Response): void => {
   `, id);
 
   // For each assignment, aggregate review metrics
-  const assignmentOverviews = assignments.map((assign) => {
+  const assignmentOverviews = await Promise.all(assignments.map(async (assign) => {
     // 1. Chapters review overview (Query 1)
-    const chapters = queryAll<any>(`
+    const chapters = await queryAll<any>(`
       SELECT 
         c.chapter_index AS chapterIndex,
         c.title AS chapterTitle,
@@ -59,7 +59,7 @@ export const getBookReviewOverview = (req: Request, res: Response): void => {
     `, assign.assignmentId, assign.assignmentId, id);
 
     // 2. Single SQL Aggregate Query for all edits across all chapters (Query 2)
-    const editsAggRows = queryAll<any>(`
+    const editsAggRows = await queryAll<any>(`
       SELECT 
         e.chapter_index AS chapterIndex,
         COUNT(e.id) AS totalEdits,
@@ -159,7 +159,7 @@ export const getBookReviewOverview = (req: Request, res: Response): void => {
       changesRequestedEdits: changesRequested,
       chapters: chapterSummaries,
     };
-  });
+  }));
 
   res.json({
     book: {
@@ -176,7 +176,7 @@ export const getBookReviewOverview = (req: Request, res: Response): void => {
 /**
  * Detailed Chapter Review Workspace Data
  */
-export const getChapterReviewDetail = (req: Request, res: Response): void => {
+export const getChapterReviewDetail = async (req: Request, res: Response): Promise<void> => {
   const { id, assignmentId, index } = req.params;
   const chapterNum = parseInt(String(index), 10);
 
@@ -185,13 +185,13 @@ export const getChapterReviewDetail = (req: Request, res: Response): void => {
     return;
   }
 
-  const book = queryOne<any>('SELECT * FROM beta_books WHERE id = ?', id);
+  const book = await queryOne<any>('SELECT * FROM beta_books WHERE id = ?', id);
   if (!book) {
     res.status(404).json({ error: 'Không tìm thấy tác phẩm' });
     return;
   }
 
-  const assignment = queryOne<any>(`
+  const assignment = await queryOne<any>(`
     SELECT ba.*, p.username AS betaUserName, p.display_name AS betaDisplayName
     FROM beta_assignments ba
     JOIN profiles p ON p.id = ba.beta_user_id
@@ -203,7 +203,7 @@ export const getChapterReviewDetail = (req: Request, res: Response): void => {
     return;
   }
 
-  const chapter = queryOne<any>(
+  const chapter = await queryOne<any>(
     'SELECT * FROM beta_chapters WHERE book_id = ? AND chapter_index = ?',
     id,
     chapterNum
@@ -215,14 +215,18 @@ export const getChapterReviewDetail = (req: Request, res: Response): void => {
   }
 
   let originalParagraphs: string[] = [];
-  try {
-    originalParagraphs = JSON.parse(chapter.paragraphs);
-  } catch {
-    originalParagraphs = [chapter.paragraphs];
+  if (Array.isArray(chapter.paragraphs)) {
+    originalParagraphs = chapter.paragraphs;
+  } else if (typeof chapter.paragraphs === 'string') {
+    try {
+      originalParagraphs = JSON.parse(chapter.paragraphs);
+    } catch {
+      originalParagraphs = [chapter.paragraphs];
+    }
   }
 
   // Get all edits for this chapter
-  const rawEdits = queryAll<any>(`
+  const rawEdits = await queryAll<any>(`
     SELECT e.*, p.username AS betaUserName, p.display_name AS betaDisplayName
     FROM beta_edits e
     JOIN profiles p ON p.id = e.beta_user_id
@@ -236,7 +240,7 @@ export const getChapterReviewDetail = (req: Request, res: Response): void => {
 
   if (editIds.length > 0) {
     const placeholders = editIds.map(() => '?').join(',');
-    allRevisions = queryAll<any>(`
+    allRevisions = await queryAll<any>(`
       SELECT 
         r.id,
         r.edit_id AS editId,
@@ -256,7 +260,7 @@ export const getChapterReviewDetail = (req: Request, res: Response): void => {
       ORDER BY r.revision_number ASC
     `, ...editIds);
 
-    allReviews = queryAll<any>(`
+    allReviews = await queryAll<any>(`
       SELECT 
         rev.id,
         rev.edit_id AS editId,
@@ -349,19 +353,45 @@ export const getChapterReviewDetail = (req: Request, res: Response): void => {
       reviews,
       currentReview,
       derivedReviewStatus,
+      reviewStatus: derivedReviewStatus,
       acceptedRevision,
     };
   });
 
-  // Calculate Approved Version paragraphs
+  // Chapter status and approval
+  const chapterStatus = await queryOne<any>(
+    'SELECT * FROM beta_chapter_status WHERE assignment_id = ? AND chapter_index = ?',
+    assignmentId,
+    chapterNum
+  );
+
+  const chapterReview = await queryOne<any>(
+    'SELECT * FROM beta_chapter_reviews WHERE assignment_id = ? AND chapter_index = ?',
+    assignmentId,
+    chapterNum
+  );
+
+  // Notes
+  const notes = await queryAll<any>(`
+    SELECT 
+      n.id, n.paragraph_index AS paragraphIndex, n.start_offset AS startOffset,
+      n.end_offset AS endOffset, n.selected_text AS selectedText, n.note,
+      n.status, n.created_at AS createdAt, p.display_name AS resolvedByName
+    FROM beta_notes n
+    LEFT JOIN profiles p ON p.id = n.resolved_by
+    WHERE n.assignment_id = ? AND n.chapter_index = ?
+    ORDER BY n.paragraph_index ASC
+  `, assignmentId, chapterNum);
+
+  // Compute approved paragraphs
   let approvedParagraphs: any[] = [];
   let approvedConflict: any = null;
+
   try {
     approvedParagraphs = buildApprovedChapter(originalParagraphs, acceptedRevisionItems);
   } catch (err: any) {
     if (err instanceof ApprovedVersionConflictError) {
       approvedConflict = {
-        code: err.code,
         message: err.message,
         editA: err.editA,
         editB: err.editB,
@@ -369,83 +399,72 @@ export const getChapterReviewDetail = (req: Request, res: Response): void => {
     }
   }
 
-  // Chapter review state
-  const chapterReview = queryOne<any>(`
-    SELECT cr.*, p.display_name AS reviewerDisplayName
-    FROM beta_chapter_reviews cr
-    JOIN profiles p ON p.id = cr.reviewer_id
-    WHERE cr.assignment_id = ? AND cr.chapter_index = ?
-  `, assignmentId, chapterNum);
+  // Derive chapter overall status
+  const pendingCount = edits.filter((e) => e.reviewStatus === 'PENDING').length;
+  const changesCount = edits.filter((e) => e.reviewStatus === 'CHANGES_REQUESTED').length;
+  const isBetaCompleted = chapterStatus?.status === 'COMPLETED';
 
-  // Notes
-  const notes = queryAll<any>(`
-    SELECT 
-      n.id,
-      n.paragraph_index AS paragraphIndex,
-      n.start_offset AS startOffset,
-      n.end_offset AS endOffset,
-      n.selected_text AS selectedText,
-      n.note,
-      n.status,
-      n.resolved_by AS resolvedBy,
-      n.resolved_at AS resolvedAt,
-      n.created_at AS createdAt,
-      p.display_name AS resolvedByName
-    FROM beta_notes n
-    LEFT JOIN profiles p ON p.id = n.resolved_by
-    WHERE n.assignment_id = ? AND n.chapter_index = ?
-    ORDER BY n.paragraph_index ASC
-  `, assignmentId, chapterNum);
-
-  // Beta completion status
-  const betaStatusRow = queryOne<any>(
-    'SELECT status FROM beta_chapter_status WHERE assignment_id = ? AND chapter_index = ?',
-    assignmentId,
-    chapterNum
-  );
-  const isBetaCompleted = betaStatusRow?.status === 'COMPLETED';
+  let derivedChapterStatus: ChapterReviewStatus = 'NOT_READY';
+  if (chapterReview && chapterReview.status === 'APPROVED') {
+    derivedChapterStatus = 'APPROVED';
+  } else if (chapterReview && chapterReview.status === 'REOPENED') {
+    derivedChapterStatus = 'REOPENED';
+  } else if (!isBetaCompleted) {
+    derivedChapterStatus = 'NOT_READY';
+  } else if (changesCount > 0) {
+    derivedChapterStatus = 'CHANGES_REQUESTED';
+  } else if (pendingCount > 0) {
+    derivedChapterStatus = 'NEEDS_REVIEW';
+  } else {
+    derivedChapterStatus = 'REVIEWED';
+  }
 
   res.json({
     chapter: {
       id: chapter.id,
-      bookId: chapter.book_id,
-      chapterIndex: chapter.chapter_index,
+      index: chapter.chapter_index,
       title: chapter.title,
       wordCount: chapter.word_count,
-      paragraphs: originalParagraphs,
+      contentVersion: chapter.content_version,
+      contentHash: chapter.content_hash,
+      originalParagraphs,
+      betaStatus: chapterStatus?.status || 'NOT_STARTED',
+      isBetaCompleted,
+      derivedStatus: derivedChapterStatus,
+      approvedAt: chapterReview?.approved_at || null,
+      approvedEditsCount: acceptedRevisionItems.length,
     },
     assignment: {
       id: assignment.id,
       betaUserId: assignment.beta_user_id,
       betaUserName: assignment.betaUserName,
       betaDisplayName: assignment.betaDisplayName,
-      isBetaCompleted,
     },
     edits,
-    acceptedRevisionItems,
-    approvedParagraphs,
-    approvedConflict,
-    chapterReview: chapterReview ? {
-      id: chapterReview.id,
-      status: chapterReview.status,
-      approvedAt: chapterReview.approved_at,
-      reviewerDisplayName: chapterReview.reviewerDisplayName,
-      reviewSnapshotVersion: chapterReview.review_snapshot_version,
-      updatedAt: chapterReview.updated_at,
-    } : null,
     notes,
+    approvedVersion: {
+      paragraphs: approvedParagraphs,
+      conflict: approvedConflict,
+    },
+    counts: {
+      total: edits.length,
+      pending: pendingCount,
+      changesRequested: changesCount,
+      accepted: edits.filter((e) => e.reviewStatus === 'ACCEPTED').length,
+      rejected: edits.filter((e) => e.reviewStatus === 'REJECTED').length,
+    },
   });
 };
 
 /**
- * Submit Admin Review on an Edit (Accept, Reject, Request Changes)
+ * Review an individual edit (Accept, Reject, Request Changes)
  */
-export const createEditReview = (req: Request, res: Response): void => {
+export const createEditReview = async (req: Request, res: Response): Promise<void> => {
   const { editId } = req.params;
   const user = req.user!;
 
   if (user.role !== 'ADMIN') {
-    res.status(403).json({ error: 'Chỉ Admin mới có quyền phê duyệt đề xuất' });
+    res.status(403).json({ error: 'Chỉ Quản trị viên mới có quyền review chỉnh sửa' });
     return;
   }
 
@@ -461,14 +480,14 @@ export const createEditReview = (req: Request, res: Response): void => {
     return;
   }
 
-  const edit = queryOne<any>('SELECT * FROM beta_edits WHERE id = ?', editId);
+  const edit = await queryOne<any>('SELECT * FROM beta_edits WHERE id = ?', editId);
   if (!edit) {
     res.status(404).json({ error: 'Không tìm thấy chỉnh sửa' });
     return;
   }
 
   // 1. Query current/latest revision of the edit
-  const currentRevision = queryOne<any>(
+  const currentRevision = await queryOne<any>(
     'SELECT * FROM beta_edit_revisions WHERE edit_id = ? ORDER BY revision_number DESC LIMIT 1',
     editId
   );
@@ -505,8 +524,8 @@ export const createEditReview = (req: Request, res: Response): void => {
   const reviewId = `rev-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const now = new Date().toISOString();
 
-  transaction(() => {
-    run(
+  await transaction(async () => {
+    await run(
       `INSERT INTO beta_edit_reviews (
         id, edit_id, assignment_id, chapter_id, reviewer_id,
         decision, comment, reviewed_revision_number, reviewed_edit_version,
@@ -526,49 +545,42 @@ export const createEditReview = (req: Request, res: Response): void => {
     );
 
     // If chapter was previously APPROVED, transition to REOPENED
-    const chapterReview = queryOne<any>(
+    const chapterReview = await queryOne<any>(
       'SELECT id, status FROM beta_chapter_reviews WHERE assignment_id = ? AND chapter_index = ?',
       edit.assignment_id,
       edit.chapter_index
     );
 
     if (chapterReview && chapterReview.status === 'APPROVED') {
-      run(
+      await run(
         `UPDATE beta_chapter_reviews SET status = 'REOPENED', updated_at = ? WHERE id = ?`,
         now,
         chapterReview.id
       );
 
-      // Log activity
-      const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      run(
+      const logReopenId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      await run(
         'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        logId,
+        logReopenId,
         user.id,
         'CHAPTER_REOPENED',
         edit.book_id,
         edit.chapter_id,
-        JSON.stringify({ reason: 'EDIT_REVIEW_MUTATION', editId, chapterIndex: edit.chapter_index }),
+        JSON.stringify({ reason: 'NEW_REVIEW_POST_APPROVAL', chapterIndex: edit.chapter_index, editId, decision }),
         now
       );
     }
 
     // Log review activity
-    const action = decision === 'ACCEPTED' 
-      ? 'EDIT_ACCEPTED' 
-      : decision === 'REJECTED' 
-        ? 'EDIT_REJECTED' 
-        : 'EDIT_CHANGES_REQUESTED';
-
     const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    run(
+    await run(
       'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       logId,
       user.id,
-      action,
+      'EDIT_REVIEWED',
       edit.book_id,
       edit.chapter_id,
-      JSON.stringify({ editId, revisionNumber: targetRevisionNumber, decision }),
+      JSON.stringify({ editId, decision, revisionNumber: targetRevisionNumber, editVersion: edit.version }),
       now
     );
   });
@@ -582,32 +594,39 @@ export const createEditReview = (req: Request, res: Response): void => {
       comment: comment ? String(comment).trim() : null,
       reviewedRevisionNumber: targetRevisionNumber,
       reviewedEditVersion: edit.version,
+      reviewerId: user.id,
+      reviewerDisplayName: user.displayName,
       createdAt: now,
     },
   });
 };
 
 /**
- * Official Chapter Approval by Admin
+ * Approve Chapter by Admin
  */
-export const approveChapter = (req: Request, res: Response): void => {
+export const approveChapter = async (req: Request, res: Response): Promise<void> => {
   const { id, assignmentId, index } = req.params;
   const user = req.user!;
   const chapterNum = parseInt(String(index), 10);
 
   if (user.role !== 'ADMIN') {
-    res.status(403).json({ error: 'Chỉ Admin mới có quyền phê duyệt chương' });
+    res.status(403).json({ error: 'Chỉ Quản trị viên mới có quyền phê duyệt chương' });
     return;
   }
 
-  const chapter = queryOne<any>('SELECT * FROM beta_chapters WHERE book_id = ? AND chapter_index = ?', id, chapterNum);
+  const chapter = await queryOne<any>(
+    'SELECT id, title, paragraphs FROM beta_chapters WHERE book_id = ? AND chapter_index = ?',
+    id,
+    chapterNum
+  );
+
   if (!chapter) {
     res.status(404).json({ error: 'Không tìm thấy chương' });
     return;
   }
 
-  // Check beta reader completion status (must be COMPLETED before admin can approve)
-  const chapterStatus = queryOne<any>(
+  // 1. Invariant: beta_chapter_status must be COMPLETED
+  const chapterStatus = await queryOne<any>(
     'SELECT status FROM beta_chapter_status WHERE assignment_id = ? AND chapter_index = ?',
     assignmentId,
     chapterNum
@@ -615,14 +634,15 @@ export const approveChapter = (req: Request, res: Response): void => {
 
   if (!chapterStatus || chapterStatus.status !== 'COMPLETED') {
     res.status(400).json({
-      error: 'Beta Reader chưa xác nhận hoàn thành chương này. Không thể phê duyệt khi chương chưa đọc xong.',
+      error: 'Không thể phê duyệt: Beta Reader chưa đánh dấu hoàn thành đọc/góp ý cho chương này (Trạng thái phải là COMPLETED).',
       code: 'CHAPTER_NOT_BETA_COMPLETE',
+      betaStatus: chapterStatus?.status || 'NOT_STARTED',
     });
     return;
   }
 
-  // Verify all edits have final decision on current version
-  const edits = queryAll<any>(`
+  // 2. Invariant: No PENDING or CHANGES_REQUESTED edits on current revisions
+  const edits = await queryAll<any>(`
     SELECT 
       e.id,
       e.paragraph_index,
@@ -661,7 +681,7 @@ export const approveChapter = (req: Request, res: Response): void => {
   const acceptedItems: AcceptedRevisionItem[] = [];
   for (const e of edits) {
     if (e.acceptedRevisionNumber) {
-      const rev = queryOne<any>(
+      const rev = await queryOne<any>(
         'SELECT * FROM beta_edit_revisions WHERE edit_id = ? AND revision_number = ?',
         e.id,
         e.acceptedRevisionNumber
@@ -696,15 +716,15 @@ export const approveChapter = (req: Request, res: Response): void => {
   }
 
   const now = new Date().toISOString();
-  const existingReview = queryOne<any>(
+  const existingReview = await queryOne<any>(
     'SELECT id, review_snapshot_version FROM beta_chapter_reviews WHERE assignment_id = ? AND chapter_index = ?',
     assignmentId,
     chapterNum
   );
 
-  transaction(() => {
+  await transaction(async () => {
     if (existingReview) {
-      run(
+      await run(
         `UPDATE beta_chapter_reviews SET
           status = 'APPROVED',
           reviewer_id = ?,
@@ -722,7 +742,7 @@ export const approveChapter = (req: Request, res: Response): void => {
       );
     } else {
       const crId = `cr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      run(
+      await run(
         `INSERT INTO beta_chapter_reviews (
           id, assignment_id, book_id, chapter_id, chapter_index,
           reviewer_id, status, approved_at, review_snapshot_version,
@@ -743,7 +763,7 @@ export const approveChapter = (req: Request, res: Response): void => {
 
     // Log activity
     const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    run(
+    await run(
       'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       logId,
       user.id,
@@ -766,7 +786,7 @@ export const approveChapter = (req: Request, res: Response): void => {
 /**
  * Reopen Chapter Review by Admin
  */
-export const reopenChapter = (req: Request, res: Response): void => {
+export const reopenChapter = async (req: Request, res: Response): Promise<void> => {
   const { id, assignmentId, index } = req.params;
   const user = req.user!;
   const chapterNum = parseInt(String(index), 10);
@@ -777,7 +797,7 @@ export const reopenChapter = (req: Request, res: Response): void => {
   }
 
   const now = new Date().toISOString();
-  const chapterReview = queryOne<any>(
+  const chapterReview = await queryOne<any>(
     'SELECT id, chapter_id FROM beta_chapter_reviews WHERE assignment_id = ? AND chapter_index = ?',
     assignmentId,
     chapterNum
@@ -788,15 +808,15 @@ export const reopenChapter = (req: Request, res: Response): void => {
     return;
   }
 
-  transaction(() => {
-    run(
+  await transaction(async () => {
+    await run(
       `UPDATE beta_chapter_reviews SET status = 'REOPENED', updated_at = ? WHERE id = ?`,
       now,
       chapterReview.id
     );
 
     const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    run(
+    await run(
       'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       logId,
       user.id,
@@ -814,7 +834,7 @@ export const reopenChapter = (req: Request, res: Response): void => {
 /**
  * Resolve Reader Note
  */
-export const resolveNote = (req: Request, res: Response): void => {
+export const resolveNote = async (req: Request, res: Response): Promise<void> => {
   const { noteId } = req.params;
   const user = req.user!;
 
@@ -823,14 +843,14 @@ export const resolveNote = (req: Request, res: Response): void => {
     return;
   }
 
-  const note = queryOne<any>('SELECT * FROM beta_notes WHERE id = ?', noteId);
+  const note = await queryOne<any>('SELECT * FROM beta_notes WHERE id = ?', noteId);
   if (!note) {
     res.status(404).json({ error: 'Không tìm thấy ghi chú' });
     return;
   }
 
   const now = new Date().toISOString();
-  run(
+  await run(
     `UPDATE beta_notes SET status = 'RESOLVED', resolved_by = ?, resolved_at = ?, updated_at = ? WHERE id = ?`,
     user.id,
     now,
@@ -844,12 +864,12 @@ export const resolveNote = (req: Request, res: Response): void => {
 /**
  * Query Deterministic Approved Version of a Chapter
  */
-export const getApprovedChapterVersion = (req: Request, res: Response): void => {
+export const getApprovedChapterVersion = async (req: Request, res: Response): Promise<void> => {
   const { id, index } = req.params;
   const { assignmentId } = req.query;
   const chapterNum = parseInt(String(index), 10);
 
-  const chapter = queryOne<any>(
+  const chapter = await queryOne<any>(
     'SELECT * FROM beta_chapters WHERE book_id = ? AND chapter_index = ?',
     id,
     chapterNum
@@ -861,17 +881,21 @@ export const getApprovedChapterVersion = (req: Request, res: Response): void => 
   }
 
   let originalParagraphs: string[] = [];
-  try {
-    originalParagraphs = JSON.parse(chapter.paragraphs);
-  } catch {
-    originalParagraphs = [chapter.paragraphs];
+  if (Array.isArray(chapter.paragraphs)) {
+    originalParagraphs = chapter.paragraphs;
+  } else if (typeof chapter.paragraphs === 'string') {
+    try {
+      originalParagraphs = JSON.parse(chapter.paragraphs);
+    } catch {
+      originalParagraphs = [chapter.paragraphs];
+    }
   }
 
   // Resolve target assignment
   let targetAssignmentId = assignmentId as string;
   if (!targetAssignmentId) {
     // Pick the primary active assignment for this book
-    const firstAssign = queryOne<any>(
+    const firstAssign = await queryOne<any>(
       "SELECT id FROM beta_assignments WHERE book_id = ? AND status = 'ACTIVE' LIMIT 1",
       id
     );
@@ -881,7 +905,7 @@ export const getApprovedChapterVersion = (req: Request, res: Response): void => 
   const acceptedItems: AcceptedRevisionItem[] = [];
 
   if (targetAssignmentId) {
-    const edits = queryAll<any>(`
+    const edits = await queryAll<any>(`
       SELECT 
         e.id,
         e.paragraph_index,
@@ -900,7 +924,7 @@ export const getApprovedChapterVersion = (req: Request, res: Response): void => 
 
     for (const e of edits) {
       if (e.acceptedRevNumber) {
-        const rev = queryOne<any>(
+        const rev = await queryOne<any>(
           'SELECT after_text FROM beta_edit_revisions WHERE edit_id = ? AND revision_number = ?',
           e.id,
           e.acceptedRevNumber

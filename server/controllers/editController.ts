@@ -18,7 +18,7 @@ const VALID_ERROR_TYPES = new Set([
 /**
  * List all edits for the current chapter and assignment.
  */
-export const listChapterEdits = (req: Request, res: Response): void => {
+export const listChapterEdits = async (req: Request, res: Response): Promise<void> => {
   const { id, index } = req.params; // bookId, chapterIndex
   const user = req.user!;
   const chapterNum = parseInt(String(index), 10);
@@ -29,7 +29,7 @@ export const listChapterEdits = (req: Request, res: Response): void => {
   }
 
   if (user.role === 'ADMIN') {
-    const edits = queryAll<any>(`
+    const edits = await queryAll<any>(`
       SELECT 
         e.*,
         p.username AS userName,
@@ -40,12 +40,12 @@ export const listChapterEdits = (req: Request, res: Response): void => {
       ORDER BY e.paragraph_index ASC, e.start_offset ASC
     `, id, chapterNum);
 
-    res.json({ edits: formatEdits(edits) });
+    res.json({ edits: await formatEdits(edits) });
     return;
   }
 
   // Beta Reader: strictly own active assignment
-  const assignment = queryOne<any>(
+  const assignment = await queryOne<any>(
     'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
     id,
     user.id,
@@ -57,19 +57,19 @@ export const listChapterEdits = (req: Request, res: Response): void => {
     return;
   }
 
-  const edits = queryAll<any>(`
+  const edits = await queryAll<any>(`
     SELECT * FROM beta_edits 
     WHERE assignment_id = ? AND chapter_index = ? AND status = 'ACTIVE'
     ORDER BY paragraph_index ASC, start_offset ASC
   `, assignment.id, chapterNum);
 
-  res.json({ edits: formatEdits(edits) });
+  res.json({ edits: await formatEdits(edits) });
 };
 
 /**
  * Create a new paragraph-anchored edit with Revision 1.
  */
-export const createEdit = (req: Request, res: Response): void => {
+export const createEdit = async (req: Request, res: Response): Promise<void> => {
   const { id, index } = req.params; // bookId, chapterIndex
   const user = req.user!;
   const chapterNum = parseInt(String(index), 10);
@@ -85,7 +85,7 @@ export const createEdit = (req: Request, res: Response): void => {
   } = req.body;
 
   // 1. Resolve active assignment
-  const assignment = queryOne<any>(
+  const assignment = await queryOne<any>(
     'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
     id,
     user.id,
@@ -98,7 +98,7 @@ export const createEdit = (req: Request, res: Response): void => {
   }
 
   // 2. Validate chapter existence
-  const chapter = queryOne<any>(
+  const chapter = await queryOne<any>(
     'SELECT id, paragraphs FROM beta_chapters WHERE book_id = ? AND chapter_index = ?',
     id,
     chapterNum
@@ -110,10 +110,14 @@ export const createEdit = (req: Request, res: Response): void => {
   }
 
   let paragraphs: string[] = [];
-  try {
-    paragraphs = JSON.parse(chapter.paragraphs);
-  } catch {
-    paragraphs = [chapter.paragraphs];
+  if (Array.isArray(chapter.paragraphs)) {
+    paragraphs = chapter.paragraphs;
+  } else if (typeof chapter.paragraphs === 'string') {
+    try {
+      paragraphs = JSON.parse(chapter.paragraphs);
+    } catch {
+      paragraphs = [chapter.paragraphs];
+    }
   }
 
   const pIdx = parseInt(String(paragraphIndex), 10);
@@ -160,7 +164,7 @@ export const createEdit = (req: Request, res: Response): void => {
   }
 
   // 6. Overlap collision check with active edits
-  const existingEdits = queryAll<any>(
+  const existingEdits = await queryAll<any>(
     `SELECT id, start_offset AS startOffset, end_offset AS endOffset
      FROM beta_edits 
      WHERE assignment_id = ? AND chapter_index = ? AND paragraph_index = ? AND status = 'ACTIVE'`,
@@ -186,9 +190,9 @@ export const createEdit = (req: Request, res: Response): void => {
   const revId = `rev-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const now = new Date().toISOString();
 
-  transaction(() => {
+  await transaction(async () => {
     // Insert edit row
-    run(
+    await run(
       `INSERT INTO beta_edits (
         id, assignment_id, book_id, chapter_id, chapter_index, beta_user_id,
         paragraph_index, start_offset, end_offset, original_text, current_text,
@@ -214,7 +218,7 @@ export const createEdit = (req: Request, res: Response): void => {
     );
 
     // Insert Revision 1
-    run(
+    await run(
       `INSERT INTO beta_edit_revisions (
         id, edit_id, revision_number, before_text, after_text,
         error_type_before, error_type_after, reason_before, reason_after, changed_by, created_at
@@ -230,95 +234,95 @@ export const createEdit = (req: Request, res: Response): void => {
     );
 
     // If chapter was COMPLETED, transition back to IN_PROGRESS!
-    const chapterStatus = queryOne<any>(
+    const chapterStatus = await queryOne<any>(
       'SELECT status FROM beta_chapter_status WHERE assignment_id = ? AND chapter_index = ?',
       assignment.id,
       chapterNum
     );
 
     if (chapterStatus && chapterStatus.status === 'COMPLETED') {
-      run(
+      await run(
         `UPDATE beta_chapter_status SET status = 'IN_PROGRESS', updated_at = ? WHERE assignment_id = ? AND chapter_index = ?`,
         now,
         assignment.id,
         chapterNum
       );
 
-      // Recompute completed chapters count
-      const countRes = queryOne<any>(
+      // Recalculate completed count
+      const countRes = await queryOne<any>(
         `SELECT COUNT(id) AS count FROM beta_chapter_status WHERE assignment_id = ? AND status = 'COMPLETED'`,
         assignment.id
       );
-      const completedCount = countRes?.count || 0;
-      const totalBook = queryOne<any>('SELECT total_chapters FROM beta_books WHERE id = ?', id);
-      const totalChapters = totalBook?.total_chapters || 1;
-      const overallPercent = Math.min(100, Math.round((completedCount / totalChapters) * 1000) / 10);
+      const totalBook = await queryOne<any>('SELECT total_chapters FROM beta_books WHERE id = ?', id);
+      const total = totalBook?.total_chapters || 1;
+      const completed = countRes?.count || 0;
+      const pct = Math.min(100, Math.round((completed / total) * 1000) / 10);
 
-      run(
+      await run(
         `UPDATE beta_assignment_progress 
          SET completed_chapters_count = ?, overall_percentage = ?, updated_at = ?
          WHERE assignment_id = ?`,
-        completedCount,
-        overallPercent,
+        completed,
+        pct,
         now,
         assignment.id
       );
     }
 
     // Invalidate chapter approval if chapter was APPROVED
-    const chapterReview = queryOne<any>(
+    const chapterReview = await queryOne<any>(
       'SELECT id, status FROM beta_chapter_reviews WHERE assignment_id = ? AND chapter_index = ?',
       assignment.id,
       chapterNum
     );
     if (chapterReview && chapterReview.status === 'APPROVED') {
-      run(
+      await run(
         `UPDATE beta_chapter_reviews SET status = 'REOPENED', updated_at = ? WHERE id = ?`,
         now,
         chapterReview.id
       );
       const logReopenId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      run(
+      await run(
         'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
         logReopenId,
         user.id,
         'CHAPTER_REOPENED',
         id,
         chapter.id,
-        JSON.stringify({ reason: 'BETA_EDIT_CREATED_POST_APPROVAL', chapterIndex: chapterNum }),
+        JSON.stringify({ reason: 'BETA_EDIT_CREATED_POST_APPROVAL', chapterIndex: chapterNum, editId }),
         now
       );
     }
 
-    // Log activity
+    // Activity log for edit creation
     const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    run(
+    await run(
       'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       logId,
       user.id,
-      'EDIT_CREATED',
+      'EDIT_PROPOSED',
       id,
       chapter.id,
-      JSON.stringify({ editId, chapterIndex: chapterNum, errorType }),
+      JSON.stringify({ editId, chapterIndex: chapterNum, paragraphIndex: pIdx, errorType }),
       now
     );
   });
 
-  const created = queryOne<any>('SELECT * FROM beta_edits WHERE id = ?', editId);
-  res.status(201).json({ edit: formatEdit(created) });
+  const created = await queryOne<any>('SELECT * FROM beta_edits WHERE id = ?', editId);
+  res.status(201).json({ edit: await formatEdit(created) });
 };
 
 /**
  * Update an existing edit (creates next revision).
+ * Enforces atomic optimistic locking via UPDATE ... WHERE id = ? AND version = ?
  */
-export const updateEdit = (req: Request, res: Response): void => {
+export const updateEdit = async (req: Request, res: Response): Promise<void> => {
   const { id, index, editId } = req.params;
   const user = req.user!;
   const chapterNum = parseInt(String(index), 10);
-
   const { proposedText, errorType, reason, expectedVersion } = req.body;
 
-  const assignment = queryOne<any>(
+  const assignment = await queryOne<any>(
     'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
     id,
     user.id,
@@ -326,11 +330,11 @@ export const updateEdit = (req: Request, res: Response): void => {
   );
 
   if (!assignment) {
-    res.status(403).json({ error: 'Bạn không có quyền chỉnh sửa tác phẩm này' });
+    res.status(403).json({ error: 'Bạn không có quyền sửa đổi bản thảo này' });
     return;
   }
 
-  const edit = queryOne<any>(
+  const edit = await queryOne<any>(
     'SELECT * FROM beta_edits WHERE id = ? AND assignment_id = ? AND beta_user_id = ?',
     editId,
     assignment.id,
@@ -347,7 +351,7 @@ export const updateEdit = (req: Request, res: Response): void => {
     return;
   }
 
-  // Optimistic concurrency check
+  // Pre-check optimistic version if supplied
   if (expectedVersion !== undefined && edit.version !== parseInt(String(expectedVersion), 10)) {
     res.status(409).json({
       error: 'Bản sửa đã được cập nhật bởi một phiên làm việc khác.',
@@ -367,13 +371,38 @@ export const updateEdit = (req: Request, res: Response): void => {
     return;
   }
 
+  const targetVersion = expectedVersion !== undefined ? parseInt(String(expectedVersion), 10) : edit.version;
   const nextVersion = edit.version + 1;
   const revId = `rev-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const now = new Date().toISOString();
 
-  transaction(() => {
-    // 1. Insert new revision
-    run(
+  let updateConflict = false;
+
+  await transaction(async () => {
+    // 1. Atomic optimistic lock update on beta_edits
+    const updateRes = await run(
+      `UPDATE beta_edits SET
+        current_text = ?,
+        error_type = ?,
+        reason = ?,
+        version = version + 1,
+        updated_at = ?
+       WHERE id = ? AND version = ?`,
+      cleanProposed,
+      errorType,
+      reason ? String(reason).trim() : null,
+      now,
+      editId,
+      targetVersion
+    );
+
+    if (updateRes.changes === 0) {
+      updateConflict = true;
+      return;
+    }
+
+    // 2. Insert new revision
+    await run(
       `INSERT INTO beta_edit_revisions (
         id, edit_id, revision_number, before_text, after_text,
         error_type_before, error_type_after, reason_before, reason_after, changed_by, created_at
@@ -391,32 +420,15 @@ export const updateEdit = (req: Request, res: Response): void => {
       now
     );
 
-    // 2. Update beta_edits
-    run(
-      `UPDATE beta_edits SET
-        current_text = ?,
-        error_type = ?,
-        reason = ?,
-        version = ?,
-        updated_at = ?
-       WHERE id = ?`,
-      cleanProposed,
-      errorType,
-      reason ? String(reason).trim() : null,
-      nextVersion,
-      now,
-      editId
-    );
-
     // 3. If chapter was COMPLETED, transition back to IN_PROGRESS
-    const chapterStatus = queryOne<any>(
+    const chapterStatus = await queryOne<any>(
       'SELECT status FROM beta_chapter_status WHERE assignment_id = ? AND chapter_index = ?',
       assignment.id,
       chapterNum
     );
 
     if (chapterStatus && chapterStatus.status === 'COMPLETED') {
-      run(
+      await run(
         `UPDATE beta_chapter_status SET status = 'IN_PROGRESS', updated_at = ? WHERE assignment_id = ? AND chapter_index = ?`,
         now,
         assignment.id,
@@ -425,19 +437,19 @@ export const updateEdit = (req: Request, res: Response): void => {
     }
 
     // Invalidate chapter approval if chapter was APPROVED
-    const chapterReview = queryOne<any>(
+    const chapterReview = await queryOne<any>(
       'SELECT id, status FROM beta_chapter_reviews WHERE assignment_id = ? AND chapter_index = ?',
       assignment.id,
       chapterNum
     );
     if (chapterReview && chapterReview.status === 'APPROVED') {
-      run(
+      await run(
         `UPDATE beta_chapter_reviews SET status = 'REOPENED', updated_at = ? WHERE id = ?`,
         now,
         chapterReview.id
       );
       const logReopenId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      run(
+      await run(
         'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
         logReopenId,
         user.id,
@@ -450,18 +462,26 @@ export const updateEdit = (req: Request, res: Response): void => {
     }
   });
 
-  const updated = queryOne<any>('SELECT * FROM beta_edits WHERE id = ?', editId);
-  res.json({ success: true, edit: formatEdit(updated) });
+  if (updateConflict) {
+    res.status(409).json({
+      error: 'Bản sửa đã được cập nhật bởi một phiên làm việc khác.',
+      code: 'EDIT_CONFLICT',
+    });
+    return;
+  }
+
+  const updated = await queryOne<any>('SELECT * FROM beta_edits WHERE id = ?', editId);
+  res.json({ success: true, edit: await formatEdit(updated) });
 };
 
 /**
  * Soft-delete / revert an edit.
  */
-export const deleteEdit = (req: Request, res: Response): void => {
+export const deleteEdit = async (req: Request, res: Response): Promise<void> => {
   const { id, editId } = req.params;
   const user = req.user!;
 
-  const assignment = queryOne<any>(
+  const assignment = await queryOne<any>(
     'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
     id,
     user.id,
@@ -473,7 +493,7 @@ export const deleteEdit = (req: Request, res: Response): void => {
     return;
   }
 
-  const edit = queryOne<any>(
+  const edit = await queryOne<any>(
     'SELECT * FROM beta_edits WHERE id = ? AND assignment_id = ? AND beta_user_id = ?',
     editId,
     assignment.id,
@@ -489,9 +509,9 @@ export const deleteEdit = (req: Request, res: Response): void => {
   const revId = `rev-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const now = new Date().toISOString();
 
-  transaction(() => {
+  await transaction(async () => {
     // Insert reversion revision
-    run(
+    await run(
       `INSERT INTO beta_edit_revisions (
         id, edit_id, revision_number, before_text, after_text,
         error_type_before, error_type_after, reason_before, reason_after, changed_by, created_at
@@ -509,7 +529,7 @@ export const deleteEdit = (req: Request, res: Response): void => {
     );
 
     // Soft delete edit
-    run(
+    await run(
       `UPDATE beta_edits SET status = 'DELETED', version = ?, updated_at = ? WHERE id = ?`,
       nextVersion,
       now,
@@ -523,11 +543,11 @@ export const deleteEdit = (req: Request, res: Response): void => {
 /**
  * Get all revision steps for an edit.
  */
-export const getEditRevisions = (req: Request, res: Response): void => {
+export const getEditRevisions = async (req: Request, res: Response): Promise<void> => {
   const { editId } = req.params;
   const user = req.user!;
 
-  const edit = queryOne<any>('SELECT * FROM beta_edits WHERE id = ?', editId);
+  const edit = await queryOne<any>('SELECT * FROM beta_edits WHERE id = ?', editId);
   if (!edit) {
     res.status(404).json({ error: 'Không tìm thấy bản sửa' });
     return;
@@ -538,7 +558,7 @@ export const getEditRevisions = (req: Request, res: Response): void => {
     return;
   }
 
-  const revisions = queryAll<any>(`
+  const revisions = await queryAll<any>(`
     SELECT 
       r.id,
       r.edit_id AS editId,
@@ -564,12 +584,12 @@ export const getEditRevisions = (req: Request, res: Response): void => {
 /**
  * Notes CRUD
  */
-export const listChapterNotes = (req: Request, res: Response): void => {
+export const listChapterNotes = async (req: Request, res: Response): Promise<void> => {
   const { id, index } = req.params;
   const user = req.user!;
   const chapterNum = parseInt(String(index), 10);
 
-  const assignment = queryOne<any>(
+  const assignment = await queryOne<any>(
     'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
     id,
     user.id,
@@ -581,7 +601,7 @@ export const listChapterNotes = (req: Request, res: Response): void => {
     return;
   }
 
-  const notes = queryAll<any>(`
+  const notes = await queryAll<any>(`
     SELECT 
       id,
       assignment_id AS assignmentId,
@@ -604,13 +624,13 @@ export const listChapterNotes = (req: Request, res: Response): void => {
   res.json({ notes });
 };
 
-export const createNote = (req: Request, res: Response): void => {
+export const createNote = async (req: Request, res: Response): Promise<void> => {
   const { id, index } = req.params;
   const user = req.user!;
   const chapterNum = parseInt(String(index), 10);
   const { paragraphIndex, startOffset, endOffset, selectedText, note } = req.body;
 
-  const assignment = queryOne<any>(
+  const assignment = await queryOne<any>(
     'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
     id,
     user.id,
@@ -622,7 +642,7 @@ export const createNote = (req: Request, res: Response): void => {
     return;
   }
 
-  const chapter = queryOne<any>('SELECT id FROM beta_chapters WHERE book_id = ? AND chapter_index = ?', id, chapterNum);
+  const chapter = await queryOne<any>('SELECT id FROM beta_chapters WHERE book_id = ? AND chapter_index = ?', id, chapterNum);
   if (!chapter) {
     res.status(404).json({ error: 'Chương không tồn tại' });
     return;
@@ -637,7 +657,7 @@ export const createNote = (req: Request, res: Response): void => {
   const noteId = `note-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const now = new Date().toISOString();
 
-  run(
+  await run(
     `INSERT INTO beta_notes (
       id, assignment_id, book_id, chapter_id, chapter_index, beta_user_id,
       paragraph_index, start_offset, end_offset, selected_text, note, created_at, updated_at
@@ -676,21 +696,21 @@ export const createNote = (req: Request, res: Response): void => {
   });
 };
 
-export const deleteNote = (req: Request, res: Response): void => {
+export const deleteNote = async (req: Request, res: Response): Promise<void> => {
   const { noteId } = req.params;
   const user = req.user!;
 
-  run('DELETE FROM beta_notes WHERE id = ? AND beta_user_id = ?', noteId, user.id);
+  await run('DELETE FROM beta_notes WHERE id = ? AND beta_user_id = ?', noteId, user.id);
   res.json({ success: true, message: 'Đã xóa ghi chú' });
 };
 
 /**
  * Admin Inspector: List all edits for a book across all Beta Readers and chapters.
  */
-export const listAdminBookEdits = (req: Request, res: Response): void => {
+export const listAdminBookEdits = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params; // bookId
 
-  const edits = queryAll<any>(`
+  const edits = await queryAll<any>(`
     SELECT 
       e.*,
       p.username AS userName,
@@ -702,21 +722,22 @@ export const listAdminBookEdits = (req: Request, res: Response): void => {
     ORDER BY e.created_at DESC
   `, id);
 
-  res.json({ edits: formatEdits(edits) });
+  res.json({ edits: await formatEdits(edits) });
 };
 
 // Helpers
-function formatEdit(e: any) {
+async function formatEdit(e: any) {
   if (!e) return null;
-  return formatEdits([e])[0] || null;
+  const formatted = await formatEdits([e]);
+  return formatted[0] || null;
 }
 
-function formatEdits(list: any[]) {
+async function formatEdits(list: any[]) {
   if (!list || list.length === 0) return [];
   const editIds = list.map(e => e.id);
   const placeholders = editIds.map(() => '?').join(',');
 
-  const reviews = queryAll<any>(`
+  const reviews = await queryAll<any>(`
     SELECT r.edit_id, r.decision, r.comment, r.reviewed_revision_number AS reviewedRevisionNumber,
            p.display_name AS reviewerDisplayName, r.created_at AS reviewCreatedAt
     FROM beta_edit_reviews r

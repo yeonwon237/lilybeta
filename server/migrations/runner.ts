@@ -2,10 +2,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import bcrypt from 'bcryptjs';
-import { db, queryAll, queryOne, run, transaction } from '../db/database.js';
+import { db, getDatabaseProvider, getAdapter } from '../db/database.js';
+import { runPostgresMigrations } from './postgresRunner.js';
+import { config } from '../config.js';
 
 export const runMigrations = async (customDb?: DatabaseSync): Promise<void> => {
-  const targetDb = customDb || db;
+  const provider = getDatabaseProvider();
+
+  if (provider === 'postgres' && !customDb) {
+    await runPostgresMigrations();
+    return;
+  }
+
+  // SQLite migration path
+  const targetDb = customDb || (db as any);
 
   const localQueryAll = <T = any>(sql: string, ...params: any[]): T[] => {
     const stmt = targetDb.prepare(sql);
@@ -35,7 +45,7 @@ export const runMigrations = async (customDb?: DatabaseSync): Promise<void> => {
     }
   };
 
-  console.log('[LilyBeta Migration] Initializing versioned migration engine...');
+  console.log('[LilyBeta Migration] Initializing versioned migration engine (SQLite)...');
 
   // 1. Ensure schema_migrations table exists
   targetDb.exec(`
@@ -124,8 +134,8 @@ export const runMigrations = async (customDb?: DatabaseSync): Promise<void> => {
   );
   if (!hasProfiles) return;
 
-  const isProduction = process.env.NODE_ENV === 'production';
-  const allowBootstrap = process.env.BOOTSTRAP_ADMIN === 'true';
+  const isProduction = config.nodeEnv === 'production';
+  const allowBootstrap = config.bootstrapAdmin;
 
   const admin = localQueryOne('SELECT id FROM profiles WHERE role = ?', 'ADMIN');
   if (!admin) {
@@ -137,18 +147,23 @@ export const runMigrations = async (customDb?: DatabaseSync): Promise<void> => {
       return;
     }
 
+    const adminUsername = config.bootstrapAdminUsername || 'admin';
+    const adminPassword = config.bootstrapAdminPassword || 'admin123456';
+
+    if (isProduction && adminPassword === 'admin123456') {
+      throw new Error('FATAL SECURITY ERROR: In production mode, default password admin123456 cannot be used for admin bootstrap.');
+    }
+
     const adminId = 'admin-root-id';
-    const username = 'admin';
-    const password = 'admin123456';
     const salt = bcrypt.genSaltSync(10);
-    const passwordHash = bcrypt.hashSync(password, salt);
+    const passwordHash = bcrypt.hashSync(adminPassword, salt);
     const now = new Date().toISOString();
 
     localRun(
       `INSERT INTO profiles (id, username, password_hash, display_name, role, is_active, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
       adminId,
-      username,
+      adminUsername,
       passwordHash,
       'LilyBeta Admin',
       'ADMIN',
@@ -156,9 +171,13 @@ export const runMigrations = async (customDb?: DatabaseSync): Promise<void> => {
       now
     );
 
-    console.log('[LilyBeta Seed] Created development admin account:');
-    console.log('   Username: admin');
-    console.log('   Password: admin123456');
+    console.log('[LilyBeta Seed] Created admin account:');
+    console.log(`   Username: ${adminUsername}`);
+    if (!isProduction) {
+      console.log(`   Password: ${adminPassword}`);
+    } else {
+      console.log(`   Password: [REDACTED]`);
+    }
   }
 };
 

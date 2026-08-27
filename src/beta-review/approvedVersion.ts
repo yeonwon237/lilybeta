@@ -32,12 +32,25 @@ export class ApprovedVersionConflictError extends Error {
  * Validates whether any accepted revisions overlap with each other
  */
 export const checkAcceptedOverlaps = (revisions: AcceptedRevisionItem[]): void => {
-  const sorted = [...revisions].sort((a, b) => a.startOffset - b.startOffset);
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const current = sorted[i];
-    const next = sorted[i + 1];
-    if (next.startOffset < current.endOffset) {
-      throw new ApprovedVersionConflictError(current, next);
+  // Group revisions by paragraphIndex so edits on different paragraphs never falsely conflict
+  const byParagraph: Record<number, AcceptedRevisionItem[]> = {};
+  for (const r of revisions) {
+    const pIdx = r.paragraphIndex ?? 0;
+    if (!byParagraph[pIdx]) {
+      byParagraph[pIdx] = [];
+    }
+    byParagraph[pIdx].push(r);
+  }
+
+  for (const pIdx of Object.keys(byParagraph)) {
+    const pRevisions = byParagraph[Number(pIdx)];
+    const sorted = [...pRevisions].sort((a, b) => a.startOffset - b.startOffset);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const current = sorted[i];
+      const next = sorted[i + 1];
+      if (next.startOffset < current.endOffset) {
+        throw new ApprovedVersionConflictError(current, next);
+      }
     }
   }
 };

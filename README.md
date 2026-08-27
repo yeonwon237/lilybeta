@@ -1,24 +1,45 @@
-# LilyBeta — Phase 1: Backend Foundation + Auth + Assignment Security
+# LilyBeta — Phase 5: Production Database + Supabase/Postgres Migration + Final QA Foundation
 
 LilyBeta là hệ thống dành riêng cho Beta Reader của LilyHub (`beta.lilyhub.top`). Hệ thống được thiết kế để Ban quản trị cấp phát bản thảo, phân công quyền đọc duyệt bảo mật, và đảm bảo **tuyệt đối không bị rò rỉ dữ liệu (chống IDOR)** giữa các Beta Reader.
 
 ---
 
-## 🎯 Mục tiêu Phase 1
+## 🎯 Mục tiêu & Tiến độ các Phase
 
-- **Auth thật**: Phân chia hai vai trò `ADMIN` và `BETA_READER`. Không mở đăng ký tự do, tài khoản do Admin cấp.
-- **Upload & Phân tích bản thảo**: Tái sử dụng engine của LilyVIP (`BookImporter`, `ChapterDetector`, `TextCleaner`) để phân tích file `TXT`, `EPUB`, `DOCX` thành cấu trúc chương chuẩn hóa.
-- **Zero Raw File Exposure**: Tuyệt đối không lưu và không cung cấp endpoint tải file gốc (`.txt`, `.docx`, `.epub`).
-- **Phân công & Kiểm soát truy cập**: Admin assign truyện cho Beta Reader. Beta Reader chỉ thấy và chỉ đọc được truyện được phân công.
-- **IDOR Protection ở Backend**: Backend kiểm tra quyền truy cập ở database level cho mọi request tới `/api/books/:id` và `/api/books/:id/chapters/:index`. Người dùng khác hoặc unassigned reader bị từ chối bằng **HTTP 403 Forbidden**.
-- **BetaCloudBookSource**: Cung cấp implementation cloud kế thừa abstraction `BookSource` của hệ sinh thái Lily.
+- **Phase 1**: Backend Foundation + Auth + Phân công + Chống IDOR.
+- **Phase 2**: Multi-Assignment per Book + Chapter Workflow (`NOT_STARTED` $\to$ `IN_PROGRESS` $\to$ `READY` $\to$ `COMPLETED`).
+- **Phase 3 & 3.1**: Inline Edits + Multi-Revision History + Paragraph Notes + Delta Writes + Local Storage Draft Recovery.
+- **Phase 4 & 4.5**: Admin Review Workspace + Revision-Bound Decisions + Approved Version Snapshot + Lean Egress + In-Flight Request Deduplication.
+- **Phase 5 (Hiện tại)**: **Production Database (Supabase / PostgreSQL)** + Data Access Abstraction Layer + Optimistic Concurrency + Derived Book Readiness Foundation (`READY_TO_PUBLISH`).
+
+---
+
+## 🏗️ Kiến trúc Persistence & Data Access Abstraction
+
+Hệ thống cung cấp abstraction layer chuẩn hóa (`server/db/DatabaseAdapter.ts`):
+
+```text
+React Client (Vite)
+       ↓
+LilyBeta API Client (Token / Authorization)
+       ↓
+Express Backend Route Controllers
+       ↓
+DatabaseAdapter Abstraction
+ ├── SqliteAdapter (Local Dev / Offline Tests: WAL mode + Node DatabaseSync)
+ └── PostgresAdapter (Production: Supabase / PostgreSQL via pg.Pool)
+```
+
+### Chế độ hoạt động môi trường (`DATABASE_PROVIDER`):
+- `DATABASE_PROVIDER=sqlite`: Cho phép dùng trong môi trường development và automated test suite (`npm test`).
+- `DATABASE_PROVIDER=postgres`: Bắt buộc khi chạy production. Nếu `NODE_ENV=production` mà thiếu `DATABASE_URL` hoặc cấu hình `sqlite`, hệ thống sẽ **Fail-Fast** và dừng ngay khi khởi động nhằm ngăn chặn việc vô tình dùng SQLite tạm thời trên server.
 
 ---
 
 ## 🚀 Cài đặt & Khởi chạy
 
 ### Yêu cầu môi trường
-- Node.js: >= 20 (khuyên dùng Node.js 24)
+- Node.js: >= 20 (khuyên dùng Node.js 22/24)
 - npm: >= 10
 
 ### 1. Cài đặt dependencies
@@ -31,96 +52,117 @@ Tạo file `.env` từ `.env.example`:
 ```bash
 cp .env.example .env
 ```
-Nội dung mặc định:
+
+**Môi trường Local Development (SQLite):**
 ```env
-PORT=3001
-JWT_SECRET=lilybeta-super-secret-key-change-in-production
-DB_PATH=./data/lilybeta.db
+PORT=3006
 NODE_ENV=development
+DATABASE_PROVIDER=sqlite
+DB_PATH=./data/lilybeta.db
+JWT_SECRET=lilybeta-super-secret-key-change-in-production
 ```
 
-### 3. Khởi tạo Database & Seed Admin
+**Môi trường Production (Supabase / PostgreSQL):**
+```env
+PORT=3006
+NODE_ENV=production
+DATABASE_PROVIDER=postgres
+DATABASE_URL=postgresql://postgres.YOUR_PROJECT:YOUR_PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true
+DB_POOL_MAX=10
+JWT_SECRET=your-strong-random-jwt-secret-min-32-chars
+BOOTSTRAP_ADMIN=true
+BOOTSTRAP_ADMIN_USERNAME=admin
+BOOTSTRAP_ADMIN_PASSWORD=your-secure-admin-password
+CORS_ORIGIN=https://beta.lilyhub.top
+```
+
+### 3. Khởi tạo Database Migrations
 ```bash
 npm run db:migrate
 ```
-Tài khoản Admin mặc định được khởi tạo:
-- **Tên đăng nhập**: `admin`
-- **Mật khẩu**: `admin123456`
+- Nếu `DATABASE_PROVIDER=sqlite`: Chạy các migration trong `server/migrations/versions/`.
+- Nếu `DATABASE_PROVIDER=postgres`: Chạy PostgreSQL baseline schema trong `server/migrations/postgres/001_initial_schema.sql`.
 
-### 4. Chạy chế độ Phát triển (Dev Mode)
-Chạy đồng thời Backend API (port 3001) và Vite Frontend (port 3000):
+### 4. Khởi chạy Development
 ```bash
 npm run dev
 ```
-Truy cập ứng dụng tại: `http://localhost:3000`
 
 ---
 
-## 🛡️ Kiểm thử Bảo mật & IDOR (Automated Test Suite)
+## 🛡️ Connection Pooling & Supabase Strategy
 
-Chạy bộ test 34 kịch bản bảo mật và phân quyền nghiêm ngặt:
+- **Driver**: Sử dụng `pg` (`node-postgres`) kết hợp `pg.Pool` để tái sử dụng connection và giới hạn tải (`DB_POOL_MAX`).
+- **Connection String**:
+  - **Transaction Pooler (Port 6543)**: Khuyên dùng khi deploy trên các môi trường serverless hoặc container có số lượng connection biến động lớn.
+  - **Direct Session (Port 5432)**: Dùng cho persistent dedicated backend servers hoặc database migrations.
+- **Ambient Transaction Context**: Hệ thống sử dụng Node.js `AsyncLocalStorage` để tự động ràng buộc mọi câu lệnh SQL trong `transaction(async () => { ... })` vào cùng 1 kết nối `client` đã checkout từ pool, bảo đảm tính nguyên tử (atomic) và tự động `ROLLBACK` khi phát sinh lỗi.
+- **Placeholder Translation**: PostgreSQL sử dụng `$1, $2, ...` trong khi SQLite dùng `?`. `PostgresAdapter` tự động biên dịch các dấu `?` bên ngoài chuỗi string literal thành `$1, $2, ...`, giúp toàn bộ logic controllers chạy song song trên cả 2 cơ sở dữ liệu mà không cần fork code.
+
+---
+
+## 📊 Derived Book Readiness Endpoint (`GET /api/admin/books/:id/readiness`)
+
+Endpoint phục vụ kiểm tra toàn diện chất lượng sách trước khi xuất bản:
+- **Tuyến đường**: `GET /api/admin/books/:id/readiness` (yêu cầu Admin token).
+- **Nguyên tắc Invariant**: Không thể gán thủ công `Mark Ready` khi còn blocker. Trạng thái `READY_TO_PUBLISH` là **derived state** chỉ đạt được khi:
+  1. Tất cả các chương đã được Beta Reader đánh dấu `COMPLETED`.
+  2. Tất cả các chương đã được Admin phê duyệt `APPROVED`.
+  3. Không có chỉnh sửa nào đang ở trạng thái `PENDING`.
+  4. Không có chỉnh sửa nào đang ở trạng thái `CHANGES_REQUESTED`.
+  5. Không có xung đột phê duyệt (`REOPENED` / overlap conflict).
+- **Hiệu năng**: Tính toán bằng single aggregate SQL query (zero N+1 query loops).
+
+---
+
+## 💾 Sao lưu & Khôi phục (Backup & Restore)
+
+### 1. Xuất / Nhập dữ liệu dev (SQLite sang PostgreSQL)
+- Xuất dữ liệu từ SQLite:
+  ```bash
+  npm run db:export-sqlite
+  ```
+  Dữ liệu được lưu vào file JSON có cấu trúc tại `data/sqlite_export.json`.
+- Nhập dữ liệu vào PostgreSQL:
+  ```bash
+  npm run db:import-postgres
+  ```
+
+### 2. Backup & Restore Production (PostgreSQL / Supabase)
+- **Dump database bằng `pg_dump`**:
+  ```bash
+  pg_dump -h db.YOUR_PROJECT.supabase.co -U postgres -d postgres -F c -b -v -f lilybeta_backup_$(date +%Y%m%d).dump
+  ```
+- **Restore database bằng `pg_restore`**:
+  ```bash
+  pg_restore -h db.YOUR_PROJECT.supabase.co -U postgres -d postgres -v -c lilybeta_backup_20260827.dump
+  ```
+- **Supabase Daily Backups**: Có thể bật tính năng tự động sao lưu Point-in-Time Recovery (PITR) trong Supabase Dashboard Settings -> Database -> Backups.
+
+---
+
+## 🧪 Kiểm thử Hệ thống (Testing Suite)
+
 ```bash
-npm run test:security
-```
-Bộ test tự động xác thực:
-1. Admin đăng nhập và cấp tài khoản cho Beta A và Beta B.
-2. Admin upload Book A và Book B.
-3. Admin assign Book A → Beta A, Book B → Beta B.
-4. Beta A đăng nhập: chỉ thấy Book A, đọc được Chapter 1 của Book A.
-5. **IDOR Test**: Beta A cố truy cập Book B (`/api/books/:idB`, `/chapters`, `/chapters/1`, `/progress`) → **403 Forbidden**.
-6. **IDOR Test**: Beta B cố truy cập Book A (`/api/books/:idA`, `/chapters/1`) → **403 Forbidden**.
-7. Beta Reader cố gọi endpoint admin → **403 Forbidden**.
-8. Khóa tài khoản Beta Reader → Token bị từ chối ngay lập tức (**401 Unauthorized**).
-9. Lưu và khôi phục tiến độ đọc chương.
-10. Ghi nhận nhật ký audit (`LOGIN`, `BOOK_CREATED`, `BOOK_ASSIGNED`, `CHAPTER_OPENED`).
+# Chạy toàn bộ 8 bộ test tự động (bao gồm IDOR, Workflow, Revisions, Reviews, Egress, Readiness)
+npm test
 
----
+# Chạy riêng kiểm thử Readiness & End-to-End Flow (61 bước)
+npm run test:readiness
 
-## 🗄️ Database Schema & Migrations
+# Chạy kiểm thử PostgreSQL Parity (nếu có DATABASE_URL kết nối PostgreSQL)
+npm run test:postgres
 
-### Tables trong Phase 1:
-1. `profiles`: Tài khoản người dùng, vai trò (`ADMIN`, `BETA_READER`), trạng thái kích hoạt (`is_active`).
-2. `beta_books`: Thông tin tác phẩm, số chương, tổng số chữ, định dạng, trạng thái workflow.
-3. `beta_chapters`: Danh sách chương và nội dung các đoạn văn (`paragraphs: string[]` lưu dưới dạng JSON).
-4. `beta_assignments`: Bảng phân công quyền đọc tác phẩm cho từng Beta Reader.
-5. `beta_chapter_progress`: Bảng theo dõi tiến độ đọc (chương hiện tại, % hoàn thành, % cuộn trang).
-6. `beta_activity_logs`: Bảng nhật ký kiểm toán hệ thống.
-
-### Chuẩn bị cho Phase 2 & 3 (Schema đã định nghĩa sẵn):
-- `beta_edits`: Lưu các đề xuất sửa đổi văn bản trực tiếp.
-- `beta_revisions`: Phản hồi và duyệt đề xuất sửa đổi.
-- `beta_notes`: Ghi chú riêng của Beta Reader trên từng đoạn văn.
-
-### File Migrations trong repo:
-- `server/migrations/001_initial_schema.sql`: Migration chạy trên SQLite cho môi trường local/self-contained.
-- `server/migrations/supabase_schema.sql`: File script PostgreSQL chuẩn bị cho deploy Supabase production kèm đầy đủ Row-Level Security (RLS) policies.
-
----
-
-## 🏗️ Kiến trúc BookSource Abstraction
-
-LilyBeta duy trì sự tương thích tuyệt đối với kiến trúc của LilyVIP:
-
-```text
-UI (BetaReaderView / BetaBookDetail)
-           ↓
-   BookSource (Interface)
-           ↓
-   BetaCloudBookSource
-           ↓
-   LilyBeta Authenticated API Client
-           ↓
-   LilyBeta Express Backend (Server-Side Authorization)
-           ↓
-   Database (SQLite / PostgreSQL)
+# Build kiểm tra kiểu dữ liệu TypeScript & bundle Frontend
+npm run build
 ```
 
 ---
 
-## 📋 Danh sách tính năng cố tình KHÔNG đưa vào Phase 1 (Out of Scope)
-Theo đúng yêu cầu đặc tả:
-- Không có inline text editing, before/after diff.
-- Không có Audio / TTS engine (`@diffusionstudio/vits-web`, NghiTTS).
-- Không có hệ thống thanh toán, VIP pass, tiers, nâng cấp gói.
-- Không có public registration (chỉ có Admin provisioning).
-- Không có web scraper/crawler.
+## ⛔ Out of Scope (Tính năng cố tình KHÔNG làm trong Phase 5)
+Theo đúng tôn chỉ kiến trúc, các tính năng sau **không** nằm trong phạm vi Phase 5:
+- Tích hợp trực tiếp LilyEditor $\to$ LilyBeta.
+- Tự động publish LilyBeta $\to$ LilyHub.
+- Đổi Client React sang kết nối trực tiếp bảng Supabase (giữ nguyên API backend để bảo vệ authorization và IDOR).
+- AI Beta / AI Auto-Review.
+- Payment / Public Sign-up.

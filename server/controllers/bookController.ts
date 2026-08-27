@@ -1,11 +1,11 @@
 import { Request, Response } from 'express';
 import { queryAll, queryOne, run, transaction } from '../db/database.js';
 
-export const listBooks = (req: Request, res: Response): void => {
+export const listBooks = async (req: Request, res: Response): Promise<void> => {
   const user = req.user!;
 
   if (user.role === 'ADMIN') {
-    const books = queryAll<any>(`
+    const books = await queryAll<any>(`
       SELECT 
         b.id,
         b.title,
@@ -26,7 +26,7 @@ export const listBooks = (req: Request, res: Response): void => {
   }
 
   // Beta Reader: strictly scoped to active assignments
-  const assignedBooks = queryAll<any>(`
+  const assignedBooks = await queryAll<any>(`
     SELECT 
       b.id,
       b.title,
@@ -53,11 +53,11 @@ export const listBooks = (req: Request, res: Response): void => {
   res.json({ books: assignedBooks });
 };
 
-export const getBook = (req: Request, res: Response): void => {
+export const getBook = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   const user = req.user!;
 
-  const book = queryOne<any>(`
+  const book = await queryOne<any>(`
     SELECT 
       b.id,
       b.title,
@@ -81,7 +81,7 @@ export const getBook = (req: Request, res: Response): void => {
   }
 
   // Fetch assignment progress for this user
-  const progress = queryOne<any>(`
+  const progress = await queryOne<any>(`
     SELECT 
       current_chapter_index AS currentChapter,
       overall_percentage AS progressPercent,
@@ -94,77 +94,49 @@ export const getBook = (req: Request, res: Response): void => {
   // Log activity
   try {
     const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    run(
+    await run(
       'INSERT INTO beta_activity_logs (id, user_id, action, book_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?)',
       logId,
       user.id,
       'BOOK_OPENED',
       id,
-      JSON.stringify({ bookTitle: book.title }),
+      JSON.stringify({ title: book.title }),
       new Date().toISOString()
     );
   } catch (err) {
-    console.error('Failed to write activity log:', err);
+    console.error('Failed to log activity:', err);
   }
 
   res.json({
     book: {
       ...book,
-      currentChapter: progress?.currentChapter || 1,
-      progressPercent: progress?.progressPercent || 0,
-      completedChaptersCount: progress?.completedChaptersCount || 0,
-      lastReadAt: progress?.lastReadAt,
+      progress: progress || null,
     },
   });
 };
 
-export const getChapterList = (req: Request, res: Response): void => {
+export const getChapterList = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const user = req.user!;
 
-  const progress = queryOne<any>(
-    'SELECT current_chapter_index, completed_chapters_count FROM beta_assignment_progress WHERE book_id = ? AND beta_user_id = ?',
-    id,
-    user.id
-  );
-  const currentChapterIndex = progress ? progress.current_chapter_index : 1;
-
-  const chapters = queryAll<any>(`
+  // Lean TOC query: excludes paragraphs payload to save network egress
+  const chapters = await queryAll<any>(`
     SELECT 
       c.id,
-      c.chapter_index AS "index",
+      c.chapter_index AS chapterIndex,
       c.title,
       c.word_count AS wordCount,
-      COALESCE(c.content_version, 1) AS contentVersion,
+      c.content_version AS contentVersion,
       c.content_hash AS contentHash,
-      c.updated_at AS updatedAt,
-      COALESCE(cs.status, 'NOT_STARTED') AS status,
-      cs.completed_at AS completedAt
+      c.updated_at AS updatedAt
     FROM beta_chapters c
-    LEFT JOIN beta_assignments ba ON ba.book_id = c.book_id AND ba.beta_user_id = ? AND ba.status = 'ACTIVE'
-    LEFT JOIN beta_chapter_status cs ON cs.assignment_id = ba.id AND cs.chapter_index = c.chapter_index
     WHERE c.book_id = ?
     ORDER BY c.chapter_index ASC
-  `, user.id, id);
+  `, id);
 
-  const formatted = chapters.map(ch => ({
-    id: ch.id,
-    index: ch.index,
-    title: ch.title,
-    wordCount: ch.wordCount,
-    contentVersion: ch.contentVersion || 1,
-    contentHash: ch.contentHash || null,
-    updatedAt: ch.updatedAt,
-    status: ch.status,
-    completedAt: ch.completedAt,
-    isRead: ch.status === 'COMPLETED' || ch.index < currentChapterIndex,
-    isCurrent: ch.index === currentChapterIndex,
-  }));
-
-  res.json({ chapters: formatted });
+  res.json({ chapters });
 };
 
-export const getChapterMeta = (req: Request, res: Response): void => {
+export const getChapterMeta = async (req: Request, res: Response): Promise<void> => {
   const { id, index } = req.params;
   const chapterNum = parseInt(String(index), 10);
 
@@ -173,59 +145,51 @@ export const getChapterMeta = (req: Request, res: Response): void => {
     return;
   }
 
-  const chapter = queryOne<any>(`
+  const meta = await queryOne<any>(`
     SELECT 
-      id AS chapterId,
-      chapter_index AS chapterIndex,
-      title,
-      word_count AS wordCount,
-      COALESCE(content_version, 1) AS version,
-      content_hash AS contentHash,
-      updated_at AS updatedAt
-    FROM beta_chapters
-    WHERE book_id = ? AND chapter_index = ?
+      c.id AS chapterId,
+      c.chapter_index AS chapterIndex,
+      c.title,
+      c.word_count AS wordCount,
+      c.content_version AS version,
+      c.content_hash AS contentHash,
+      c.updated_at AS updatedAt
+    FROM beta_chapters c
+    WHERE c.book_id = ? AND c.chapter_index = ?
   `, id, chapterNum);
 
-  if (!chapter) {
+  if (!meta) {
     res.status(404).json({ error: 'Không tìm thấy chương' });
     return;
   }
 
-  res.json({
-    chapterId: chapter.chapterId,
-    chapterIndex: chapter.chapterIndex,
-    title: chapter.title,
-    wordCount: chapter.wordCount,
-    version: chapter.version,
-    contentHash: chapter.contentHash,
-    updatedAt: chapter.updatedAt,
-  });
+  res.json(meta);
 };
 
-export const getChapter = (req: Request, res: Response): void => {
+export const getChapter = async (req: Request, res: Response): Promise<void> => {
   const { id, index } = req.params;
-  const chapterNum = parseInt(String(index), 10);
   const user = req.user!;
 
+  const chapterNum = parseInt(String(index), 10);
   if (isNaN(chapterNum) || chapterNum < 1) {
     res.status(400).json({ error: 'Chỉ số chương không hợp lệ' });
     return;
   }
 
-  const chapter = queryOne<any>(`
+  const chapter = await queryOne<any>(`
     SELECT 
-      id,
-      book_id AS bookId,
-      chapter_index AS "index",
-      title,
-      paragraphs,
-      word_count AS wordCount,
-      COALESCE(content_version, 1) AS contentVersion,
-      content_hash AS contentHash,
-      created_at AS createdAt,
-      updated_at AS updatedAt
-    FROM beta_chapters
-    WHERE book_id = ? AND chapter_index = ?
+      c.id,
+      c.book_id AS bookId,
+      c.chapter_index AS chapterIndex,
+      c.title,
+      c.paragraphs,
+      c.word_count AS wordCount,
+      c.content_version AS contentVersion,
+      c.content_hash AS contentHash,
+      c.created_at AS createdAt,
+      c.updated_at AS updatedAt
+    FROM beta_chapters c
+    WHERE c.book_id = ? AND c.chapter_index = ?
   `, id, chapterNum);
 
   if (!chapter) {
@@ -244,16 +208,20 @@ export const getChapter = (req: Request, res: Response): void => {
   }
 
   let paragraphs: string[] = [];
-  try {
-    paragraphs = JSON.parse(chapter.paragraphs);
-  } catch {
-    paragraphs = [chapter.paragraphs];
+  if (Array.isArray(chapter.paragraphs)) {
+    paragraphs = chapter.paragraphs;
+  } else if (typeof chapter.paragraphs === 'string') {
+    try {
+      paragraphs = JSON.parse(chapter.paragraphs);
+    } catch {
+      paragraphs = [chapter.paragraphs];
+    }
   }
 
   const now = new Date().toISOString();
 
   // Find active assignment
-  const assignment = queryOne<any>(
+  const assignment = await queryOne<any>(
     'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
     id,
     user.id,
@@ -266,7 +234,7 @@ export const getChapter = (req: Request, res: Response): void => {
   let lastScrollPercent = 0;
 
   if (assignment) {
-    const existingStatus = queryOne<any>(
+    const existingStatus = await queryOne<any>(
       'SELECT status, started_at, completed_at, last_scroll_percent FROM beta_chapter_status WHERE assignment_id = ? AND chapter_index = ?',
       assignment.id,
       chapterNum
@@ -274,9 +242,9 @@ export const getChapter = (req: Request, res: Response): void => {
 
     if (!existingStatus) {
       // First time opening: transition to IN_PROGRESS & log CHAPTER_STARTED
-      transaction(() => {
+      await transaction(async () => {
         const statusId = `cs-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-        run(
+        await run(
           `INSERT INTO beta_chapter_status (
             id, assignment_id, book_id, chapter_id, chapter_index, beta_user_id, status, started_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, 'IN_PROGRESS', ?, ?)`,
@@ -289,7 +257,7 @@ export const getChapter = (req: Request, res: Response): void => {
           now,
           now
         );
-        run(
+        await run(
           `UPDATE beta_assignment_progress 
            SET current_chapter_index = ?, last_read_at = ?, updated_at = ?
            WHERE assignment_id = ?`,
@@ -298,13 +266,13 @@ export const getChapter = (req: Request, res: Response): void => {
           now,
           assignment.id
         );
-        run(
+        await run(
           `UPDATE beta_books SET status = 'IN_BETA', updated_at = ? WHERE id = ? AND status = 'ASSIGNED'`,
           now,
           id
         );
         const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-        run(
+        await run(
           'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
           logId,
           user.id,
@@ -319,15 +287,15 @@ export const getChapter = (req: Request, res: Response): void => {
       startedAt = now;
     } else if (existingStatus.status === 'NOT_STARTED') {
       // Transition from NOT_STARTED to IN_PROGRESS
-      transaction(() => {
-        run(
+      await transaction(async () => {
+        await run(
           `UPDATE beta_chapter_status SET status = 'IN_PROGRESS', started_at = ?, updated_at = ? WHERE assignment_id = ? AND chapter_index = ?`,
           now,
           now,
           assignment.id,
           chapterNum
         );
-        run(
+        await run(
           `UPDATE beta_assignment_progress 
            SET current_chapter_index = ?, last_read_at = ?, updated_at = ?
            WHERE assignment_id = ?`,
@@ -337,7 +305,7 @@ export const getChapter = (req: Request, res: Response): void => {
           assignment.id
         );
         const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-        run(
+        await run(
           'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
           logId,
           user.id,
@@ -365,7 +333,7 @@ export const getChapter = (req: Request, res: Response): void => {
     chapter: {
       id: chapter.id,
       bookId: chapter.bookId,
-      index: chapter.index,
+      index: chapter.chapterIndex,
       title: chapter.title,
       wordCount: chapter.wordCount,
       paragraphs,
@@ -381,11 +349,11 @@ export const getChapter = (req: Request, res: Response): void => {
   });
 };
 
-export const getProgress = (req: Request, res: Response): void => {
+export const getProgress = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   const user = req.user!;
 
-  const progress = queryOne<any>(`
+  const progress = await queryOne<any>(`
     SELECT 
       ap.book_id AS bookId,
       ap.current_chapter_index AS chapterIndex,
@@ -404,13 +372,13 @@ export const getProgress = (req: Request, res: Response): void => {
   res.json({ progress: progress || null });
 };
 
-export const saveProgress = (req: Request, res: Response): void => {
+export const saveProgress = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params; // bookId
   const { chapterIndex, percentage, scrollPercent, scrollOffset } = req.body;
   const user = req.user!;
 
   // 1. Validate active assignment strictly (NO fallback!)
-  const assignment = queryOne<any>(
+  const assignment = await queryOne<any>(
     'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
     id,
     user.id,
@@ -432,7 +400,7 @@ export const saveProgress = (req: Request, res: Response): void => {
   }
 
   // 3. Validate chapter exists in book
-  const chapter = queryOne<any>(
+  const chapter = await queryOne<any>(
     'SELECT id, title FROM beta_chapters WHERE book_id = ? AND chapter_index = ?',
     id,
     chapterNum
@@ -448,9 +416,9 @@ export const saveProgress = (req: Request, res: Response): void => {
   const cleanScrollOffset = Math.max(0, Number(scrollOffset) || 0);
   const now = new Date().toISOString();
 
-  transaction(() => {
+  await transaction(async () => {
     // 5. Upsert chapter status record (update scroll position, start if not started)
-    const existingStatus = queryOne<any>(
+    const existingStatus = await queryOne<any>(
       'SELECT id, status FROM beta_chapter_status WHERE assignment_id = ? AND chapter_index = ?',
       assignment.id,
       chapterNum
@@ -458,7 +426,7 @@ export const saveProgress = (req: Request, res: Response): void => {
 
     if (!existingStatus) {
       const statusId = `cs-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      run(
+      await run(
         `INSERT INTO beta_chapter_status (
           id, assignment_id, book_id, chapter_id, chapter_index, beta_user_id, status, started_at, last_scroll_percent, last_scroll_offset, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, 'IN_PROGRESS', ?, ?, ?, ?)`,
@@ -474,7 +442,7 @@ export const saveProgress = (req: Request, res: Response): void => {
         now
       );
     } else {
-      run(
+      await run(
         `UPDATE beta_chapter_status 
          SET last_scroll_percent = ?, last_scroll_offset = ?, updated_at = ?
          WHERE assignment_id = ? AND chapter_index = ?`,
@@ -487,7 +455,7 @@ export const saveProgress = (req: Request, res: Response): void => {
     }
 
     // 6. Upsert book-level assignment progress
-    run(
+    await run(
       `INSERT INTO beta_assignment_progress (
         id, assignment_id, book_id, beta_user_id, current_chapter_index, overall_percentage, completed_chapters_count, last_read_at, updated_at
       ) VALUES (
@@ -505,24 +473,25 @@ export const saveProgress = (req: Request, res: Response): void => {
       now,
       now
     );
-
-    // 7. Transition book status from ASSIGNED to IN_BETA
-    run(
-      `UPDATE beta_books SET status = 'IN_BETA', updated_at = ? WHERE id = ? AND status = 'ASSIGNED'`,
-      now,
-      id
-    );
   });
 
-  res.json({ success: true, updatedAt: now });
+  res.json({
+    success: true,
+    progress: {
+      chapterIndex: chapterNum,
+      scrollPercent: cleanScrollPercent,
+      scrollOffset: cleanScrollOffset,
+      updatedAt: now,
+    },
+  });
 };
 
-export const completeChapter = (req: Request, res: Response): void => {
-  const { id, index } = req.params; // bookId, chapterIndex
+export const completeChapter = async (req: Request, res: Response): Promise<void> => {
+  const { id, index } = req.params;
   const user = req.user!;
 
-  // 1. Validate active assignment
-  const assignment = queryOne<any>(
+  // 1. Verify user assignment strictly
+  const assignment = await queryOne<any>(
     'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
     id,
     user.id,
@@ -541,7 +510,7 @@ export const completeChapter = (req: Request, res: Response): void => {
     return;
   }
 
-  const chapter = queryOne<any>(
+  const chapter = await queryOne<any>(
     'SELECT id, title FROM beta_chapters WHERE book_id = ? AND chapter_index = ?',
     id,
     chapterNum
@@ -552,16 +521,16 @@ export const completeChapter = (req: Request, res: Response): void => {
     return;
   }
 
-  const book = queryOne<any>('SELECT total_chapters FROM beta_books WHERE id = ?', id);
+  const book = await queryOne<any>('SELECT total_chapters FROM beta_books WHERE id = ?', id);
   const totalChapters = book?.total_chapters || 1;
   const now = new Date().toISOString();
 
   let completedCount = 0;
   let overallPercentage = 0;
 
-  transaction(() => {
+  await transaction(async () => {
     // 3. Mark chapter as COMPLETED
-    const existing = queryOne<any>(
+    const existing = await queryOne<any>(
       'SELECT id, status FROM beta_chapter_status WHERE assignment_id = ? AND chapter_index = ?',
       assignment.id,
       chapterNum
@@ -569,7 +538,7 @@ export const completeChapter = (req: Request, res: Response): void => {
 
     if (!existing) {
       const statusId = `cs-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      run(
+      await run(
         `INSERT INTO beta_chapter_status (
           id, assignment_id, book_id, chapter_id, chapter_index, beta_user_id, status, started_at, completed_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?)`,
@@ -584,7 +553,7 @@ export const completeChapter = (req: Request, res: Response): void => {
         now
       );
     } else {
-      run(
+      await run(
         `UPDATE beta_chapter_status 
          SET status = 'COMPLETED', completed_at = ?, updated_at = ?
          WHERE assignment_id = ? AND chapter_index = ?`,
@@ -596,7 +565,7 @@ export const completeChapter = (req: Request, res: Response): void => {
     }
 
     // 4. Count completed chapters for this assignment
-    const countRes = queryOne<any>(
+    const countRes = await queryOne<any>(
       `SELECT COUNT(id) AS count FROM beta_chapter_status WHERE assignment_id = ? AND status = 'COMPLETED'`,
       assignment.id
     );
@@ -604,7 +573,7 @@ export const completeChapter = (req: Request, res: Response): void => {
     overallPercentage = Math.min(100, Math.round((completedCount / totalChapters) * 1000) / 10);
 
     // 5. Update book-level progress
-    run(
+    await run(
       `INSERT INTO beta_assignment_progress (
         id, assignment_id, book_id, beta_user_id, current_chapter_index, overall_percentage, completed_chapters_count, last_read_at, updated_at
       ) VALUES (
@@ -627,17 +596,17 @@ export const completeChapter = (req: Request, res: Response): void => {
 
     // 6. If all chapters are completed, transition status to BETA_COMPLETE (never auto-publish!)
     if (completedCount >= totalChapters) {
-      run(
+      await run(
         `UPDATE beta_books SET status = 'BETA_COMPLETE', updated_at = ? WHERE id = ?`,
         now,
         id
       );
-      run(
+      await run(
         `UPDATE beta_assignments SET status = 'COMPLETED' WHERE id = ?`,
         assignment.id
       );
     } else {
-      run(
+      await run(
         `UPDATE beta_books SET status = 'IN_BETA', updated_at = ? WHERE id = ? AND status IN ('DRAFT', 'ASSIGNED')`,
         now,
         id
@@ -646,7 +615,7 @@ export const completeChapter = (req: Request, res: Response): void => {
 
     // 7. Log activity
     const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    run(
+    await run(
       'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       logId,
       user.id,
@@ -669,11 +638,11 @@ export const completeChapter = (req: Request, res: Response): void => {
   });
 };
 
-export const getChapterWorkflow = (req: Request, res: Response): void => {
+export const getChapterWorkflow = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   const user = req.user!;
 
-  const assignment = queryOne<any>(
+  const assignment = await queryOne<any>(
     'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
     id,
     user.id,
@@ -685,7 +654,7 @@ export const getChapterWorkflow = (req: Request, res: Response): void => {
     return;
   }
 
-  const statuses = queryAll<any>(
+  const statuses = await queryAll<any>(
     `SELECT chapter_index AS chapterIndex, status, started_at AS startedAt, completed_at AS completedAt, last_scroll_percent AS lastScrollPercent
      FROM beta_chapter_status
      WHERE assignment_id = ?`,
