@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-main: #f5f0e8;
+    --card-bg: #fffdfa;
+    --text-primary: #201b18;
+    --text-secondary: #71675e;
+    --text-muted: #9b9085;
+    --border-subtle: rgba(75, 59, 48, 0.11);
+    --luxury-wine: #7d2949;
+    --luxury-gold: #b89456;
+    --luxury-ink: #211b19;
+  }
+  
+  html, body, #root {
+    min-height: 100%;
+    background-color: #FAF8F5;
+    color: #1F1C18;
+  }
+
+  body {
+    font-family: 'Be Vietnam Pro', Inter, system-ui, -apple-system, sans-serif;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+button, input, select, textarea { font: inherit; }
+
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid rgba(169, 53, 97, 0.45);
+  outline-offset: 2px;
+}
+
+::selection { background: #fceef4; color: #752a47; }
