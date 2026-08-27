@@ -37,46 +37,12 @@ export const getBookReviewOverview = (req: Request, res: Response): void => {
     JOIN profiles p ON p.id = ba.beta_user_id
     LEFT JOIN beta_assignment_progress ap ON ap.assignment_id = ba.id
     WHERE ba.book_id = ? AND ba.status = 'ACTIVE'
-    ORDER BY ba.created_at ASC
+    ORDER BY ba.assigned_at ASC
   `, id);
 
   // For each assignment, aggregate review metrics
   const assignmentOverviews = assignments.map((assign) => {
-    // Total edits count
-    const editsCountRes = queryOne<any>(`
-      SELECT COUNT(id) AS total FROM beta_edits
-      WHERE assignment_id = ? AND status = 'ACTIVE'
-    `, assign.assignmentId);
-    const totalEdits = editsCountRes?.total || 0;
-
-    // Get all active edits with their current version and latest review on current version
-    const edits = queryAll<any>(`
-      SELECT 
-        e.id,
-        e.version,
-        (
-          SELECT r.decision 
-          FROM beta_edit_reviews r 
-          WHERE r.edit_id = e.id AND r.reviewed_revision_number = e.version
-          ORDER BY r.created_at DESC LIMIT 1
-        ) AS currentDecision
-      FROM beta_edits e
-      WHERE e.assignment_id = ? AND e.status = 'ACTIVE'
-    `, assign.assignmentId);
-
-    let accepted = 0;
-    let rejected = 0;
-    let changesRequested = 0;
-    let pending = 0;
-
-    for (const e of edits) {
-      if (e.currentDecision === 'ACCEPTED') accepted++;
-      else if (e.currentDecision === 'REJECTED') rejected++;
-      else if (e.currentDecision === 'CHANGES_REQUESTED') changesRequested++;
-      else pending++;
-    }
-
-    // Chapters review overview
+    // 1. Chapters review overview (Query 1)
     const chapters = queryAll<any>(`
       SELECT 
         c.chapter_index AS chapterIndex,
@@ -92,33 +58,61 @@ export const getBookReviewOverview = (req: Request, res: Response): void => {
       ORDER BY c.chapter_index ASC
     `, assign.assignmentId, assign.assignmentId, id);
 
+    // 2. Single SQL Aggregate Query for all edits across all chapters (Query 2)
+    const editsAggRows = queryAll<any>(`
+      SELECT 
+        e.chapter_index AS chapterIndex,
+        COUNT(e.id) AS totalEdits,
+        SUM(CASE WHEN r.decision = 'ACCEPTED' THEN 1 ELSE 0 END) AS acceptedEdits,
+        SUM(CASE WHEN r.decision = 'REJECTED' THEN 1 ELSE 0 END) AS rejectedEdits,
+        SUM(CASE WHEN r.decision = 'CHANGES_REQUESTED' THEN 1 ELSE 0 END) AS changesRequestedEdits,
+        SUM(CASE WHEN r.decision IS NULL THEN 1 ELSE 0 END) AS pendingEdits
+      FROM beta_edits e
+      LEFT JOIN (
+        SELECT r1.edit_id, r1.reviewed_revision_number, r1.decision
+        FROM beta_edit_reviews r1
+        INNER JOIN (
+          SELECT edit_id, reviewed_revision_number, MAX(created_at) AS max_created
+          FROM beta_edit_reviews
+          GROUP BY edit_id, reviewed_revision_number
+        ) r2 ON r1.edit_id = r2.edit_id 
+            AND r1.reviewed_revision_number = r2.reviewed_revision_number 
+            AND r1.created_at = r2.max_created
+      ) r ON r.edit_id = e.id AND r.reviewed_revision_number = e.version
+      WHERE e.assignment_id = ? AND e.status = 'ACTIVE'
+      GROUP BY e.chapter_index
+    `, assign.assignmentId);
+
+    const editsAggMap: Record<number, any> = {};
+    let totalEdits = 0;
+    let accepted = 0;
+    let rejected = 0;
+    let changesRequested = 0;
+    let pending = 0;
+
+    for (const row of editsAggRows) {
+      editsAggMap[row.chapterIndex] = row;
+      totalEdits += Number(row.totalEdits) || 0;
+      accepted += Number(row.acceptedEdits) || 0;
+      rejected += Number(row.rejectedEdits) || 0;
+      changesRequested += Number(row.changesRequestedEdits) || 0;
+      pending += Number(row.pendingEdits) || 0;
+    }
+
     const chapterSummaries = chapters.map((ch) => {
-      // Edits for this chapter
-      const chEdits = queryAll<any>(`
-        SELECT 
-          e.id,
-          e.version,
-          (
-            SELECT r.decision 
-            FROM beta_edit_reviews r 
-            WHERE r.edit_id = e.id AND r.reviewed_revision_number = e.version
-            ORDER BY r.created_at DESC LIMIT 1
-          ) AS currentDecision
-        FROM beta_edits e
-        WHERE e.assignment_id = ? AND e.chapter_index = ? AND e.status = 'ACTIVE'
-      `, assign.assignmentId, ch.chapterIndex);
+      const agg = editsAggMap[ch.chapterIndex] || {
+        totalEdits: 0,
+        acceptedEdits: 0,
+        rejectedEdits: 0,
+        changesRequestedEdits: 0,
+        pendingEdits: 0,
+      };
 
-      let chPending = 0;
-      let chAccepted = 0;
-      let chRejected = 0;
-      let chChanges = 0;
-
-      for (const e of chEdits) {
-        if (e.currentDecision === 'ACCEPTED') chAccepted++;
-        else if (e.currentDecision === 'REJECTED') chRejected++;
-        else if (e.currentDecision === 'CHANGES_REQUESTED') chChanges++;
-        else chPending++;
-      }
+      const chPending = Number(agg.pendingEdits) || 0;
+      const chAccepted = Number(agg.acceptedEdits) || 0;
+      const chRejected = Number(agg.rejectedEdits) || 0;
+      const chChanges = Number(agg.changesRequestedEdits) || 0;
+      const chTotal = Number(agg.totalEdits) || 0;
 
       let reviewStatus: ChapterReviewStatus = 'NOT_READY';
       if (ch.approvalStatus === 'APPROVED') {
@@ -140,7 +134,7 @@ export const getBookReviewOverview = (req: Request, res: Response): void => {
         chapterTitle: ch.chapterTitle,
         wordCount: ch.wordCount,
         isBetaCompleted: ch.betaStatus === 'COMPLETED',
-        totalEdits: chEdits.length,
+        totalEdits: chTotal,
         pendingEdits: chPending,
         acceptedEdits: chAccepted,
         rejectedEdits: chRejected,
@@ -236,13 +230,16 @@ export const getChapterReviewDetail = (req: Request, res: Response): void => {
     ORDER BY e.paragraph_index ASC, e.start_offset ASC
   `, assignmentId, chapterNum);
 
-  const acceptedRevisionItems: AcceptedRevisionItem[] = [];
+  const editIds = rawEdits.map((e) => e.id);
+  let allRevisions: any[] = [];
+  let allReviews: any[] = [];
 
-  const edits = rawEdits.map((e) => {
-    // Revisions
-    const revisions = queryAll<any>(`
+  if (editIds.length > 0) {
+    const placeholders = editIds.map(() => '?').join(',');
+    allRevisions = queryAll<any>(`
       SELECT 
         r.id,
+        r.edit_id AS editId,
         r.revision_number AS revisionNumber,
         r.before_text AS beforeText,
         r.after_text AS afterText,
@@ -255,12 +252,11 @@ export const getChapterReviewDetail = (req: Request, res: Response): void => {
         p.display_name AS changedByName
       FROM beta_edit_revisions r
       JOIN profiles p ON p.id = r.changed_by
-      WHERE r.edit_id = ?
+      WHERE r.edit_id IN (${placeholders})
       ORDER BY r.revision_number ASC
-    `, e.id);
+    `, ...editIds);
 
-    // Reviews history
-    const reviews = queryAll<any>(`
+    allReviews = queryAll<any>(`
       SELECT 
         rev.id,
         rev.edit_id AS editId,
@@ -273,9 +269,28 @@ export const getChapterReviewDetail = (req: Request, res: Response): void => {
         p.display_name AS reviewerDisplayName
       FROM beta_edit_reviews rev
       JOIN profiles p ON p.id = rev.reviewer_id
-      WHERE rev.edit_id = ?
+      WHERE rev.edit_id IN (${placeholders})
       ORDER BY rev.created_at ASC
-    `, e.id);
+    `, ...editIds);
+  }
+
+  const revisionsByEditId: Record<string, any[]> = {};
+  for (const rev of allRevisions) {
+    if (!revisionsByEditId[rev.editId]) revisionsByEditId[rev.editId] = [];
+    revisionsByEditId[rev.editId].push(rev);
+  }
+
+  const reviewsByEditId: Record<string, any[]> = {};
+  for (const rev of allReviews) {
+    if (!reviewsByEditId[rev.editId]) reviewsByEditId[rev.editId] = [];
+    reviewsByEditId[rev.editId].push(rev);
+  }
+
+  const acceptedRevisionItems: AcceptedRevisionItem[] = [];
+
+  const edits = rawEdits.map((e) => {
+    const revisions = revisionsByEditId[e.id] || [];
+    const reviews = reviewsByEditId[e.id] || [];
 
     // Latest review on current revision
     const currentReview = reviews

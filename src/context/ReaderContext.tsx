@@ -181,6 +181,18 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [editSaveError, setEditSaveError] = useState<string | null>(null);
   const currentUserId = user?.id || 'anonymous';
   const autosaveTimerRef = useRef<number | null>(null);
+  const chapterListRef = useRef(chapterList);
+  chapterListRef.current = chapterList;
+
+  const lastSyncedProgressRef = useRef<{ chapterIndex: number; scrollPercent: number }>({ chapterIndex: -1, scrollPercent: -1 });
+  const pendingProgressRef = useRef<{
+    bookId: string;
+    chapterIndex: number;
+    overallPercent: number;
+    chapterTitle: string;
+    scrollPercent: number;
+    scrollOffset: number;
+  } | null>(null);
 
   const activeTheme = ALL_READER_THEMES.find(t => t.id === settings.activeThemeId) || ALL_READER_THEMES[0];
 
@@ -220,10 +232,69 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     });
   };
 
+  // Immediate flush of debounced progress to cloud
+  const flushPendingAutosave = useCallback(async () => {
+    if (autosaveTimerRef.current) {
+      window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+
+    const pending = pendingProgressRef.current;
+    if (!pending) return;
+    pendingProgressRef.current = null;
+
+    try {
+      setIsAutosaving(true);
+      await source.saveProgress(
+        pending.bookId,
+        pending.chapterIndex,
+        pending.overallPercent,
+        pending.chapterTitle,
+        pending.scrollPercent,
+        pending.scrollOffset
+      );
+      lastSyncedProgressRef.current = {
+        chapterIndex: pending.chapterIndex,
+        scrollPercent: pending.scrollPercent,
+      };
+      const nowStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+      setLastSavedText(`Đã lưu lúc ${nowStr}`);
+    } catch (err) {
+      console.warn('Autosave progress failed:', err);
+    } finally {
+      setIsAutosaving(false);
+    }
+  }, [source]);
+
+  // Lifecycle listeners to flush progress on tab change, unload, or unmount
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        flushPendingAutosave();
+      }
+    };
+    const handlePageHide = () => {
+      flushPendingAutosave();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+      flushPendingAutosave();
+    };
+  }, [flushPendingAutosave]);
+
   // Load Book & Workflow
   const initReader = async (bookId: string, targetChapter?: number) => {
     setIsLoadingChapter(true);
     setReaderError(null);
+
+    if (user?.id) {
+      source.setUserId(user.id);
+    }
 
     try {
       const loadedBook = await source.getBook(bookId);
@@ -242,10 +313,11 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       ]);
 
       setChapterList(toc);
+      chapterListRef.current = toc;
       setWorkflowMap(workflow);
 
       const chapterToOpen = targetChapter && targetChapter >= 1 ? targetChapter : (loadedBook.currentChapter || 1);
-      await loadChapterInternal(bookId, chapterToOpen, loadedBook.totalChapters || 1);
+      await loadChapterInternal(bookId, chapterToOpen, loadedBook.totalChapters || 1, toc);
     } catch (err: any) {
       setReaderError(err?.message || 'Không thể tải dữ liệu đọc bản thảo.');
     } finally {
@@ -253,13 +325,25 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   };
 
-  const loadChapterInternal = async (bookId: string, chapterIndex: number, total: number) => {
+  const loadChapterInternal = async (
+    bookId: string, 
+    chapterIndex: number, 
+    _total: number, 
+    explicitToc?: any[]
+  ) => {
+    // Flush any pending progress from previous chapter immediately
+    await flushPendingAutosave();
+
     setIsLoadingChapter(true);
     setReaderError(null);
 
     try {
+      const activeToc = explicitToc || chapterListRef.current;
+      const tocItem = activeToc.find((item: any) => item.index === chapterIndex);
+      const expectedVersion = tocItem?.contentVersion;
+
       const [ch, chapterEdits, chapterNotes] = await Promise.all([
-        source.getChapter(bookId, chapterIndex),
+        source.getChapter(bookId, chapterIndex, { expectedVersion, userId: user?.id }),
         source.getChapterEdits(bookId, chapterIndex),
         source.getChapterNotes(bookId, chapterIndex),
       ]);
@@ -273,6 +357,12 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       setCurrentChapterIndex(chapterIndex);
       setEdits(chapterEdits);
       setNotes(chapterNotes);
+
+      // Initialize last synced state with restored scroll
+      lastSyncedProgressRef.current = {
+        chapterIndex,
+        scrollPercent: ch.lastScrollPercent || 0,
+      };
 
       // Update chapterList isCurrent & isRead
       setChapterList(prev => prev.map(item => ({
@@ -335,41 +425,47 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setIsToolbarVisible(v => !v);
   };
 
-  // Debounced cloud autosave (1 second debounce)
+  // Debounced cloud autosave (15 seconds debounce with dirty state check)
   const triggerAutosave = useCallback((scrollPercent: number, scrollOffset: number) => {
     if (!book || !currentChapter) return;
+
+    const lastSynced = lastSyncedProgressRef.current;
+    const isSameChapter = lastSynced.chapterIndex === currentChapterIndex;
+    const delta = Math.abs(scrollPercent - lastSynced.scrollPercent);
+
+    // Dirty check: skip write if in same chapter and scroll delta < 3%
+    if (isSameChapter && delta < 3) {
+      return;
+    }
+
+    const overallPercent = Math.min(100, Math.round((currentChapterIndex / totalChapters) * 100));
+    pendingProgressRef.current = {
+      bookId: book.id,
+      chapterIndex: currentChapterIndex,
+      overallPercent,
+      chapterTitle: currentChapter.title,
+      scrollPercent,
+      scrollOffset,
+    };
 
     if (autosaveTimerRef.current) {
       window.clearTimeout(autosaveTimerRef.current);
     }
 
-    autosaveTimerRef.current = window.setTimeout(async () => {
-      try {
-        setIsAutosaving(true);
-        const overallPercent = Math.min(100, Math.round((currentChapterIndex / totalChapters) * 100));
-        await source.saveProgress(
-          book.id,
-          currentChapterIndex,
-          overallPercent,
-          currentChapter.title,
-          scrollPercent,
-          scrollOffset
-        );
-        const nowStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-        setLastSavedText(`Đã lưu lúc ${nowStr}`);
-      } catch (err) {
-        console.warn('Autosave progress failed:', err);
-      } finally {
-        setIsAutosaving(false);
-      }
-    }, 1000);
-  }, [book, currentChapter, currentChapterIndex, totalChapters, source]);
+    // 15 seconds debounce for background scroll sync
+    autosaveTimerRef.current = window.setTimeout(() => {
+      flushPendingAutosave();
+    }, 15000);
+  }, [book, currentChapter, currentChapterIndex, totalChapters, flushPendingAutosave]);
 
   // Mark current chapter as completed
   const markCurrentChapterCompleted = async () => {
     if (!book) return;
 
     try {
+      // Flush any pending progress before marking completed
+      await flushPendingAutosave();
+
       const res = await source.completeChapter(book.id, currentChapterIndex);
 
       setWorkflowMap(prev => ({

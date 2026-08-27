@@ -708,49 +708,62 @@ export const listAdminBookEdits = (req: Request, res: Response): void => {
 // Helpers
 function formatEdit(e: any) {
   if (!e) return null;
-
-  const latestReview = queryOne<any>(`
-    SELECT r.decision, r.comment, r.reviewed_revision_number AS reviewedRevisionNumber,
-           p.display_name AS reviewerDisplayName, r.created_at AS reviewCreatedAt
-    FROM beta_edit_reviews r
-    LEFT JOIN profiles p ON p.id = r.reviewer_id
-    WHERE r.edit_id = ?
-    ORDER BY r.created_at DESC LIMIT 1
-  `, e.id);
-
-  const isCurrentReview = latestReview && latestReview.reviewedRevisionNumber === e.version;
-
-  return {
-    id: e.id,
-    assignmentId: e.assignment_id,
-    bookId: e.book_id,
-    chapterId: e.chapter_id,
-    chapterIndex: e.chapter_index,
-    betaUserId: e.beta_user_id,
-    paragraphIndex: e.paragraph_index,
-    startOffset: e.start_offset,
-    endOffset: e.end_offset,
-    originalText: e.original_text,
-    currentText: e.current_text,
-    prefixContext: e.prefix_context,
-    suffixContext: e.suffix_context,
-    errorType: e.error_type,
-    reason: e.reason,
-    status: e.status,
-    version: e.version,
-    createdAt: e.created_at,
-    updatedAt: e.updated_at,
-    userName: e.userName,
-    userDisplayName: e.userDisplayName,
-    revisionCount: e.revisionCount,
-    reviewStatus: isCurrentReview ? latestReview.decision : 'PENDING',
-    reviewComment: latestReview?.comment || null,
-    reviewerDisplayName: latestReview?.reviewerDisplayName || null,
-    isStaleReview: latestReview ? latestReview.reviewedRevisionNumber !== e.version : false,
-    reviewedRevisionNumber: latestReview?.reviewedRevisionNumber || null,
-  };
+  return formatEdits([e])[0] || null;
 }
 
 function formatEdits(list: any[]) {
-  return (list || []).map(formatEdit);
+  if (!list || list.length === 0) return [];
+  const editIds = list.map(e => e.id);
+  const placeholders = editIds.map(() => '?').join(',');
+
+  const reviews = queryAll<any>(`
+    SELECT r.edit_id, r.decision, r.comment, r.reviewed_revision_number AS reviewedRevisionNumber,
+           p.display_name AS reviewerDisplayName, r.created_at AS reviewCreatedAt
+    FROM beta_edit_reviews r
+    LEFT JOIN profiles p ON p.id = r.reviewer_id
+    WHERE r.edit_id IN (${placeholders})
+    ORDER BY r.created_at DESC
+  `, ...editIds);
+
+  const latestReviewMap: Record<string, any> = {};
+  for (const r of reviews) {
+    if (!latestReviewMap[r.edit_id]) {
+      latestReviewMap[r.edit_id] = r;
+    }
+  }
+
+  return list.map(e => {
+    const latestReview = latestReviewMap[e.id] || null;
+    const isCurrentReview = latestReview && latestReview.reviewedRevisionNumber === e.version;
+
+    return {
+      id: e.id,
+      assignmentId: e.assignment_id,
+      bookId: e.book_id,
+      chapterId: e.chapter_id,
+      chapterIndex: e.chapter_index,
+      betaUserId: e.beta_user_id,
+      paragraphIndex: e.paragraph_index,
+      startOffset: e.start_offset,
+      endOffset: e.end_offset,
+      originalText: e.original_text,
+      currentText: e.current_text,
+      prefixContext: e.prefix_context,
+      suffixContext: e.suffix_context,
+      errorType: e.error_type,
+      reason: e.reason,
+      status: e.status,
+      version: e.version,
+      createdAt: e.created_at,
+      updatedAt: e.updated_at,
+      userName: e.userName,
+      userDisplayName: e.userDisplayName,
+      revisionCount: e.revisionCount,
+      reviewStatus: isCurrentReview ? latestReview.decision : 'PENDING',
+      reviewComment: latestReview?.comment || null,
+      reviewerDisplayName: latestReview?.reviewerDisplayName || null,
+      isStaleReview: latestReview ? latestReview.reviewedRevisionNumber !== e.version : false,
+      reviewedRevisionNumber: latestReview?.reviewedRevisionNumber || null,
+    };
+  });
 }

@@ -1,5 +1,7 @@
 const TOKEN_STORAGE_KEY = 'lilybeta_token';
 
+import { RequestDeduplicator } from './requestDedupe';
+
 export class ApiError extends Error {
   public status: number;
   public code?: string;
@@ -68,8 +70,13 @@ class ApiClient {
     return data as T;
   }
 
-  public get<T>(path: string): Promise<T> {
-    return this.request<T>(path, { method: 'GET' });
+  public get<T>(path: string, options?: { dedupe?: boolean }): Promise<T> {
+    if (options?.dedupe === false) {
+      return this.request<T>(path, { method: 'GET' });
+    }
+    const token = this.getToken() || 'anon';
+    const key = `GET:${token}:${path}`;
+    return RequestDeduplicator.dedupe(key, () => this.request<T>(path, { method: 'GET' }));
   }
 
   public post<T>(path: string, body?: any): Promise<T> {

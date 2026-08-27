@@ -8,15 +8,25 @@ import {
 import { BetaEdit, EditRevision, BetaNote, ErrorType } from '../../beta-edit/editTypes';
 import { BookSource } from './BookSource';
 import { api } from '../../services/api';
+import { ChapterCache } from '../../cache/chapterCache';
 
 export class BetaCloudBookSource implements BookSource {
   private static instance: BetaCloudBookSource | null = null;
+  private currentUserId: string = 'anonymous';
 
   public static getInstance(): BetaCloudBookSource {
     if (!this.instance) {
       this.instance = new BetaCloudBookSource();
     }
     return this.instance;
+  }
+
+  public setUserId(userId: string): void {
+    this.currentUserId = userId || 'anonymous';
+  }
+
+  public getUserId(): string {
+    return this.currentUserId;
   }
 
   /**
@@ -43,14 +53,103 @@ export class BetaCloudBookSource implements BookSource {
   }
 
   /**
-   * Get specific chapter content and paragraphs. Enforces server authorization.
+   * Get lightweight chapter metadata (no paragraphs payload).
    */
-  public async getChapter(bookId: string, chapterIndex: number): Promise<Chapter | null> {
+  public async getChapterMeta(bookId: string, chapterIndex: number): Promise<{
+    chapterId: string;
+    chapterIndex: number;
+    title: string;
+    wordCount: number;
+    version: number;
+    contentHash?: string;
+    updatedAt: string;
+  } | null> {
     try {
+      return await api.get<any>(`/books/${bookId}/chapters/${chapterIndex}/meta`);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Get specific chapter content and paragraphs.
+   * Leverages local IndexedDB cache with version-based stale validation.
+   * If cached and version is current: ZERO network egress for chapter body!
+   */
+  public async getChapter(
+    bookId: string, 
+    chapterIndex: number,
+    options?: { expectedVersion?: number; userId?: string }
+  ): Promise<Chapter | null> {
+    const effectiveUserId = options?.userId || this.currentUserId;
+
+    try {
+      // 1. Check local IndexedDB cache
+      const cached = await ChapterCache.getCachedChapter(effectiveUserId, bookId, chapterIndex);
+
+      if (cached) {
+        // Case A: TOC already provided expectedVersion
+        if (options?.expectedVersion !== undefined) {
+          if (cached.contentVersion === options.expectedVersion) {
+            // CACHE HIT: Exact version match! Zero network egress!
+            return {
+              id: cached.chapterId,
+              bookId: cached.bookId,
+              index: cached.chapterIndex,
+              title: cached.title,
+              wordCount: cached.wordCount,
+              paragraphs: cached.paragraphs,
+              contentVersion: cached.contentVersion,
+              contentHash: cached.contentHash,
+              updatedAt: cached.updatedAt,
+            };
+          }
+        } else {
+          // Case B: Check lightweight metadata endpoint without downloading paragraphs
+          const meta = await this.getChapterMeta(bookId, chapterIndex);
+          if (meta && meta.version === cached.contentVersion) {
+            // CACHE HIT: Meta matches local version!
+            return {
+              id: cached.chapterId,
+              bookId: cached.bookId,
+              index: cached.chapterIndex,
+              title: cached.title,
+              wordCount: cached.wordCount,
+              paragraphs: cached.paragraphs,
+              contentVersion: cached.contentVersion,
+              contentHash: cached.contentHash,
+              updatedAt: cached.updatedAt,
+            };
+          }
+        }
+      }
+
+      // 2. Cache miss or version mismatch: Fetch full chapter from server
       const res = await api.get<{ chapter: Chapter }>(`/books/${bookId}/chapters/${chapterIndex}`);
-      return res.chapter || null;
+      const serverChapter = res.chapter || null;
+
+      if (serverChapter) {
+        // Save to IndexedDB cache
+        await ChapterCache.setCachedChapter({
+          userId: effectiveUserId,
+          bookId,
+          chapterId: serverChapter.id,
+          chapterIndex,
+          title: serverChapter.title,
+          paragraphs: serverChapter.paragraphs || [],
+          wordCount: serverChapter.wordCount,
+          contentVersion: serverChapter.contentVersion || 1,
+          contentHash: serverChapter.contentHash,
+          updatedAt: serverChapter.updatedAt || new Date().toISOString(),
+          cachedAt: Date.now(),
+        });
+      }
+
+      return serverChapter;
     } catch (err: any) {
       if (err?.status === 403 || err?.status === 404) {
+        // Security policy: If server returns 403 (revoked/unauthorized), clear local cache
+        await ChapterCache.deleteCachedChapter(effectiveUserId, bookId, chapterIndex);
         return null;
       }
       throw err;
@@ -58,7 +157,7 @@ export class BetaCloudBookSource implements BookSource {
   }
 
   /**
-   * Get Table of Contents for a book with workflow status.
+   * Get Table of Contents for a book with workflow status and contentVersion.
    */
   public async getChapterList(bookId: string): Promise<Array<{ 
     index: number; 
@@ -68,6 +167,8 @@ export class BetaCloudBookSource implements BookSource {
     isCurrent: boolean;
     status?: string;
     completedAt?: string;
+    contentVersion?: number;
+    updatedAt?: string;
   }>> {
     const res = await api.get<{ chapters: any[] }>(`/books/${bookId}/chapters`);
     return res.chapters || [];

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
 import { queryAll, queryOne, run, transaction } from '../db/database.js';
 
 export const listBetaReaders = (_req: Request, res: Response): void => {
@@ -254,17 +255,19 @@ export const saveParsedBook = (req: Request, res: Response): void => {
       const ch = chapters[i];
       const chapterId = `ch-${bookId}-${i + 1}`;
       const paragraphsJson = JSON.stringify(ch.paragraphs || []);
+      const hash = crypto.createHash('sha256').update(paragraphsJson).digest('hex');
 
       run(
         `INSERT INTO beta_chapters (
-          id, book_id, chapter_index, title, paragraphs, word_count, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          id, book_id, chapter_index, title, paragraphs, word_count, content_version, content_hash, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
         chapterId,
         bookId,
         ch.index || (i + 1),
         ch.title || `Chương ${i + 1}`,
         paragraphsJson,
         ch.wordCount || 0,
+        hash,
         now,
         now
       );
@@ -435,8 +438,11 @@ export const revokeAssignment = (req: Request, res: Response): void => {
   res.json({ success: true, message: 'Đã hủy phân công' });
 };
 
-export const getActivityLogs = (_req: Request, res: Response): void => {
-  const logs = queryAll<any>(`
+export const getActivityLogs = (req: Request, res: Response): void => {
+  const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '30'), 10)));
+  const cursor = req.query.cursor ? String(req.query.cursor) : null;
+
+  let sql = `
     SELECT 
       l.id,
       l.user_id AS userId,
@@ -451,9 +457,21 @@ export const getActivityLogs = (_req: Request, res: Response): void => {
     FROM beta_activity_logs l
     LEFT JOIN profiles p ON p.id = l.user_id
     LEFT JOIN beta_books b ON b.id = l.book_id
-    ORDER BY l.created_at DESC
-    LIMIT 100
-  `);
+  `;
+  const params: any[] = [];
 
-  res.json({ logs });
+  if (cursor) {
+    sql += ` WHERE l.created_at < ?`;
+    params.push(cursor);
+  }
+
+  sql += ` ORDER BY l.created_at DESC LIMIT ?`;
+  params.push(limit + 1);
+
+  const rows = queryAll<any>(sql, ...params);
+  const hasMore = rows.length > limit;
+  const logs = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor = hasMore && logs.length > 0 ? logs[logs.length - 1].createdAt : null;
+
+  res.json({ logs, nextCursor, hasMore, limit });
 };

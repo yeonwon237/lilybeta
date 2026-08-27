@@ -17,7 +17,8 @@
     "test:drafts": "tsx tests/draft-store.test.ts",
     "test:approved": "tsx tests/approved-version-renderer.test.ts",
     "test:review": "tsx tests/admin-review-security.test.ts",
-    "test": "npm run test:security && npm run test:renderer && npm run test:migrations && npm run test:drafts && npm run test:approved && npm run test:review"
+    "test:egress": "tsx tests/egress-optimization.test.ts",
+    "test": "npm run test:security && npm run test:renderer && npm run test:migrations && npm run test:drafts && npm run test:approved && npm run test:review && npm run test:egress"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

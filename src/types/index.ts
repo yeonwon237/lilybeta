@@ -67,6 +67,8 @@ export interface Chapter {
   startedAt?: string;
   completedAt?: string;
   lastScrollPercent?: number;
+  contentVersion?: number;
+  contentHash?: string;
   createdAt?: string;
   updatedAt?: string;
 }

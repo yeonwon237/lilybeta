@@ -135,6 +135,9 @@ export const getChapterList = (req: Request, res: Response): void => {
       c.chapter_index AS "index",
       c.title,
       c.word_count AS wordCount,
+      COALESCE(c.content_version, 1) AS contentVersion,
+      c.content_hash AS contentHash,
+      c.updated_at AS updatedAt,
       COALESCE(cs.status, 'NOT_STARTED') AS status,
       cs.completed_at AS completedAt
     FROM beta_chapters c
@@ -149,6 +152,9 @@ export const getChapterList = (req: Request, res: Response): void => {
     index: ch.index,
     title: ch.title,
     wordCount: ch.wordCount,
+    contentVersion: ch.contentVersion || 1,
+    contentHash: ch.contentHash || null,
+    updatedAt: ch.updatedAt,
     status: ch.status,
     completedAt: ch.completedAt,
     isRead: ch.status === 'COMPLETED' || ch.index < currentChapterIndex,
@@ -156,6 +162,44 @@ export const getChapterList = (req: Request, res: Response): void => {
   }));
 
   res.json({ chapters: formatted });
+};
+
+export const getChapterMeta = (req: Request, res: Response): void => {
+  const { id, index } = req.params;
+  const chapterNum = parseInt(String(index), 10);
+
+  if (isNaN(chapterNum) || chapterNum < 1) {
+    res.status(400).json({ error: 'Chỉ số chương không hợp lệ' });
+    return;
+  }
+
+  const chapter = queryOne<any>(`
+    SELECT 
+      id AS chapterId,
+      chapter_index AS chapterIndex,
+      title,
+      word_count AS wordCount,
+      COALESCE(content_version, 1) AS version,
+      content_hash AS contentHash,
+      updated_at AS updatedAt
+    FROM beta_chapters
+    WHERE book_id = ? AND chapter_index = ?
+  `, id, chapterNum);
+
+  if (!chapter) {
+    res.status(404).json({ error: 'Không tìm thấy chương' });
+    return;
+  }
+
+  res.json({
+    chapterId: chapter.chapterId,
+    chapterIndex: chapter.chapterIndex,
+    title: chapter.title,
+    wordCount: chapter.wordCount,
+    version: chapter.version,
+    contentHash: chapter.contentHash,
+    updatedAt: chapter.updatedAt,
+  });
 };
 
 export const getChapter = (req: Request, res: Response): void => {
@@ -176,13 +220,26 @@ export const getChapter = (req: Request, res: Response): void => {
       title,
       paragraphs,
       word_count AS wordCount,
-      created_at AS createdAt
+      COALESCE(content_version, 1) AS contentVersion,
+      content_hash AS contentHash,
+      created_at AS createdAt,
+      updated_at AS updatedAt
     FROM beta_chapters
     WHERE book_id = ? AND chapter_index = ?
   `, id, chapterNum);
 
   if (!chapter) {
     res.status(404).json({ error: 'Không tìm thấy chương' });
+    return;
+  }
+
+  // HTTP ETag & Conditional GET
+  const etag = `"${chapter.contentVersion}-${chapter.contentHash || ''}"`;
+  res.setHeader('ETag', etag);
+  res.setHeader('Cache-Control', 'private, no-cache');
+
+  if (req.headers['if-none-match'] === etag) {
+    res.status(304).end();
     return;
   }
 
@@ -209,16 +266,15 @@ export const getChapter = (req: Request, res: Response): void => {
   let lastScrollPercent = 0;
 
   if (assignment) {
-    transaction(() => {
-      // 1. Fetch or initialize chapter status
-      const existingStatus = queryOne<any>(
-        'SELECT status, started_at, completed_at, last_scroll_percent FROM beta_chapter_status WHERE assignment_id = ? AND chapter_index = ?',
-        assignment.id,
-        chapterNum
-      );
+    const existingStatus = queryOne<any>(
+      'SELECT status, started_at, completed_at, last_scroll_percent FROM beta_chapter_status WHERE assignment_id = ? AND chapter_index = ?',
+      assignment.id,
+      chapterNum
+    );
 
-      if (!existingStatus) {
-        // First time opening: transition to IN_PROGRESS
+    if (!existingStatus) {
+      // First time opening: transition to IN_PROGRESS & log CHAPTER_STARTED
+      transaction(() => {
         const statusId = `cs-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
         run(
           `INSERT INTO beta_chapter_status (
@@ -233,59 +289,76 @@ export const getChapter = (req: Request, res: Response): void => {
           now,
           now
         );
-        chapterWorkflowStatus = 'IN_PROGRESS';
-        startedAt = now;
-      } else {
-        chapterWorkflowStatus = existingStatus.status;
-        startedAt = existingStatus.started_at;
-        completedAt = existingStatus.completed_at;
-        lastScrollPercent = existingStatus.last_scroll_percent || 0;
-
-        // If it was NOT_STARTED, move to IN_PROGRESS
-        if (existingStatus.status === 'NOT_STARTED') {
-          run(
-            `UPDATE beta_chapter_status SET status = 'IN_PROGRESS', started_at = ?, updated_at = ? WHERE assignment_id = ? AND chapter_index = ?`,
-            now,
-            now,
-            assignment.id,
-            chapterNum
-          );
-          chapterWorkflowStatus = 'IN_PROGRESS';
-          startedAt = now;
-        }
-      }
-
-      // 2. Update assignment progress last_read_at and current_chapter_index
-      run(
-        `UPDATE beta_assignment_progress 
-         SET current_chapter_index = ?, last_read_at = ?, updated_at = ?
-         WHERE assignment_id = ?`,
-        chapterNum,
-        now,
-        now,
-        assignment.id
-      );
-
-      // 3. If book is currently ASSIGNED, move it to IN_BETA
-      run(
-        `UPDATE beta_books SET status = 'IN_BETA', updated_at = ? WHERE id = ? AND status = 'ASSIGNED'`,
-        now,
-        id
-      );
-
-      // 4. Log activity
-      const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      run(
-        'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        logId,
-        user.id,
-        'CHAPTER_OPENED',
-        id,
-        chapter.id,
-        JSON.stringify({ chapterIndex: chapterNum, chapterTitle: chapter.title }),
-        now
-      );
-    });
+        run(
+          `UPDATE beta_assignment_progress 
+           SET current_chapter_index = ?, last_read_at = ?, updated_at = ?
+           WHERE assignment_id = ?`,
+          chapterNum,
+          now,
+          now,
+          assignment.id
+        );
+        run(
+          `UPDATE beta_books SET status = 'IN_BETA', updated_at = ? WHERE id = ? AND status = 'ASSIGNED'`,
+          now,
+          id
+        );
+        const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        run(
+          'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          logId,
+          user.id,
+          'CHAPTER_STARTED',
+          id,
+          chapter.id,
+          JSON.stringify({ chapterIndex: chapterNum, chapterTitle: chapter.title }),
+          now
+        );
+      });
+      chapterWorkflowStatus = 'IN_PROGRESS';
+      startedAt = now;
+    } else if (existingStatus.status === 'NOT_STARTED') {
+      // Transition from NOT_STARTED to IN_PROGRESS
+      transaction(() => {
+        run(
+          `UPDATE beta_chapter_status SET status = 'IN_PROGRESS', started_at = ?, updated_at = ? WHERE assignment_id = ? AND chapter_index = ?`,
+          now,
+          now,
+          assignment.id,
+          chapterNum
+        );
+        run(
+          `UPDATE beta_assignment_progress 
+           SET current_chapter_index = ?, last_read_at = ?, updated_at = ?
+           WHERE assignment_id = ?`,
+          chapterNum,
+          now,
+          now,
+          assignment.id
+        );
+        const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        run(
+          'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          logId,
+          user.id,
+          'CHAPTER_STARTED',
+          id,
+          chapter.id,
+          JSON.stringify({ chapterIndex: chapterNum, chapterTitle: chapter.title }),
+          now
+        );
+      });
+      chapterWorkflowStatus = 'IN_PROGRESS';
+      startedAt = now;
+      completedAt = existingStatus.completed_at;
+      lastScrollPercent = existingStatus.last_scroll_percent || 0;
+    } else {
+      // Already IN_PROGRESS or COMPLETED: strictly READ ONLY! Zero DB writes, zero activity logs.
+      chapterWorkflowStatus = existingStatus.status;
+      startedAt = existingStatus.started_at;
+      completedAt = existingStatus.completed_at;
+      lastScrollPercent = existingStatus.last_scroll_percent || 0;
+    }
   }
 
   res.json({
@@ -296,11 +369,14 @@ export const getChapter = (req: Request, res: Response): void => {
       title: chapter.title,
       wordCount: chapter.wordCount,
       paragraphs,
+      contentVersion: chapter.contentVersion,
+      contentHash: chapter.contentHash,
       status: chapterWorkflowStatus,
       startedAt,
       completedAt,
       lastScrollPercent,
       createdAt: chapter.createdAt,
+      updatedAt: chapter.updatedAt,
     },
   });
 };

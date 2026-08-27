@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS public.beta_chapters (
   title TEXT NOT NULL,
   paragraphs JSONB NOT NULL,
   word_count INTEGER NOT NULL DEFAULT 0,
+  content_version INTEGER NOT NULL DEFAULT 1,
+  content_hash TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(book_id, chapter_index)
@@ -205,11 +207,14 @@ CREATE INDEX IF NOT EXISTS idx_profiles_username ON public.profiles(username);
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
 CREATE INDEX IF NOT EXISTS idx_beta_books_status ON public.beta_books(status);
 CREATE INDEX IF NOT EXISTS idx_beta_chapters_book_idx ON public.beta_chapters(book_id, chapter_index);
+CREATE INDEX IF NOT EXISTS idx_beta_chapters_book_version ON public.beta_chapters(book_id, chapter_index, content_version);
 CREATE INDEX IF NOT EXISTS idx_beta_assignments_user_status ON public.beta_assignments(beta_user_id, status);
 CREATE INDEX IF NOT EXISTS idx_beta_assignments_book_status ON public.beta_assignments(book_id, status);
 CREATE INDEX IF NOT EXISTS idx_beta_assignment_progress_user ON public.beta_assignment_progress(beta_user_id, book_id);
 CREATE INDEX IF NOT EXISTS idx_beta_chapter_status_assign ON public.beta_chapter_status(assignment_id, chapter_index);
 CREATE INDEX IF NOT EXISTS idx_beta_activity_user ON public.beta_activity_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_beta_activity_created_at ON public.beta_activity_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_beta_activity_user_created ON public.beta_activity_logs(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_beta_edits_chapter_para ON public.beta_edits(chapter_id, paragraph_index);
 CREATE INDEX IF NOT EXISTS idx_beta_edits_assignment ON public.beta_edits(assignment_id, chapter_index, status);
 CREATE INDEX IF NOT EXISTS idx_beta_edit_revisions_edit ON public.beta_edit_revisions(edit_id, revision_number);

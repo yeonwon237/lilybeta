@@ -50,6 +50,7 @@ export const createApp = () => {
   app.get('/api/books/:id', requireAuth, requireBookAccess, bookController.getBook);
   app.get('/api/books/:id/workflow', requireAuth, requireBookAccess, bookController.getChapterWorkflow);
   app.get('/api/books/:id/chapters', requireAuth, requireBookAccess, bookController.getChapterList);
+  app.get('/api/books/:id/chapters/:index/meta', requireAuth, requireBookAccess, bookController.getChapterMeta);
   app.get('/api/books/:id/chapters/:index', requireAuth, requireBookAccess, bookController.getChapter);
   app.get('/api/books/:id/chapters/:index/approved', requireAuth, requireBookAccess, reviewController.getApprovedChapterVersion);
   app.post('/api/books/:id/chapters/:index/complete', requireAuth, requireBookAccess, bookController.completeChapter);
