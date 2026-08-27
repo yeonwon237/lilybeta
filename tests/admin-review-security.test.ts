@@ -103,6 +103,11 @@ const runReviewSecurityTests = async () => {
             title: 'Chương 1: Khởi Đầu',
             paragraphs: ['Hắn nhìn nàng với ánh mắt trầm ngâm.', 'Gió thổi qua rặng liễu ven hồ.'],
           },
+          {
+            index: 2,
+            title: 'Chương 2: Tiếp Diễn',
+            paragraphs: ['Một ngày mới bắt đầu trên kinh thành.'],
+          },
         ],
       }),
     });
@@ -279,8 +284,34 @@ const runReviewSecurityTests = async () => {
     assert(rev3Edit.version === 3, 'Edit version incremented to 3');
     assert(rev3Edit.reviewStatus === 'PENDING', 'Revision 3 reviewStatus is PENDING again');
 
-    // Admin accepts Revision 3
-    await fetch(`${baseUrl}/api/admin/edits/${edit1.id}/reviews`, {
+    // [Bug 1 Test] Admin reviews edit version 3 but passes stale expectedRevisionNumber 1 -> must return 409 REVIEW_STALE
+    const staleRevRes = await fetch(`${baseUrl}/api/admin/edits/${edit1.id}/reviews`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({
+        decision: 'ACCEPTED',
+        expectedRevisionNumber: 1,
+        expectedEditVersion: 3,
+      }),
+    });
+    assert(staleRevRes.status === 409, 'Review with stale expectedRevisionNumber rejected with 409 Conflict');
+    const staleRevData = await staleRevRes.json();
+    assert(staleRevData.code === 'REVIEW_STALE', 'Error code is REVIEW_STALE');
+
+    // [Bug 1 Test] Review with non-existent revision -> rejected with 409 REVIEW_STALE
+    const nonExistentRevRes = await fetch(`${baseUrl}/api/admin/edits/${edit1.id}/reviews`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({
+        decision: 'ACCEPTED',
+        expectedRevisionNumber: 999,
+        expectedEditVersion: 3,
+      }),
+    });
+    assert(nonExistentRevRes.status === 409, 'Review with non-existent revision rejected with 409 Conflict');
+
+    // Admin accepts Revision 3 with matching expectedRevisionNumber & expectedEditVersion
+    const acceptRev3Res = await fetch(`${baseUrl}/api/admin/edits/${edit1.id}/reviews`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
@@ -289,6 +320,7 @@ const runReviewSecurityTests = async () => {
         expectedEditVersion: 3,
       }),
     });
+    assert(acceptRev3Res.status === 201, 'Admin accepts Revision 3 returns 201 Created');
 
     // 11. Security & IDOR Defenses
     console.log('\n[Phase 11] Security & IDOR Defenses');
@@ -319,7 +351,27 @@ const runReviewSecurityTests = async () => {
 
     // 12. Chapter Approval & Invalidation Lifecycle
     console.log('\n[Phase 12] Chapter Approval & Invalidation Lifecycle');
-    // Admin approves chapter 1
+
+    // [Bug 2 Test] Beta chapter is IN_PROGRESS (not completed) + all edits reviewed -> approve must FAIL with 400
+    const prematureApproveRes = await fetch(
+      `${baseUrl}/api/admin/books/${book.id}/assignments/${assignment.id}/chapters/1/approve`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${adminToken}` },
+      }
+    );
+    assert(prematureApproveRes.status === 400, 'Admin approving IN_PROGRESS chapter rejected with 400 Bad Request');
+    const prematureData = await prematureApproveRes.json();
+    assert(prematureData.code === 'CHAPTER_NOT_BETA_COMPLETE', 'Error code is CHAPTER_NOT_BETA_COMPLETE');
+
+    // Beta Reader marks chapter 1 as COMPLETED
+    const completeChapterRes = await fetch(`${baseUrl}/api/books/${book.id}/chapters/1/complete`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert(completeChapterRes.status === 200, 'Beta marks chapter completed returns 200 OK');
+
+    // Admin approves chapter 1 now that it is COMPLETED
     const approveChapterRes = await fetch(
       `${baseUrl}/api/admin/books/${book.id}/assignments/${assignment.id}/chapters/1/approve`,
       {
@@ -327,7 +379,7 @@ const runReviewSecurityTests = async () => {
         headers: { Authorization: `Bearer ${adminToken}` },
       }
     );
-    assert(approveChapterRes.status === 200, 'Admin approves chapter returns 200 OK');
+    assert(approveChapterRes.status === 200, 'Admin approves completed chapter returns 200 OK');
     const approveData = await approveChapterRes.json();
     assert(approveData.success === true, 'Chapter approved successfully');
 

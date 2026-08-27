@@ -467,23 +467,40 @@ export const createEditReview = (req: Request, res: Response): void => {
     return;
   }
 
-  // Stale check: verify current edit version matches what Admin reviewed
-  if (expectedEditVersion !== undefined && edit.version !== parseInt(String(expectedEditVersion), 10)) {
+  // 1. Query current/latest revision of the edit
+  const currentRevision = queryOne<any>(
+    'SELECT * FROM beta_edit_revisions WHERE edit_id = ? ORDER BY revision_number DESC LIMIT 1',
+    editId
+  );
+
+  if (!currentRevision) {
     res.status(409).json({
-      error: 'Bản sửa đã được Beta Reader cập nhật phiên bản mới. Hãy xem phiên bản mới trước khi duyệt.',
+      error: 'Không tìm thấy revision hợp lệ cho chỉnh sửa này.',
       code: 'REVIEW_STALE',
     });
     return;
   }
 
-  // Determine target revision number
-  const latestRev = queryOne<any>(
-    'SELECT MAX(revision_number) AS maxRev FROM beta_edit_revisions WHERE edit_id = ?',
-    editId
-  );
-  const targetRevisionNumber = expectedRevisionNumber !== undefined 
-    ? parseInt(String(expectedRevisionNumber), 10) 
-    : (latestRev?.maxRev || edit.version);
+  // 2. expectedEditVersion must equal edit.version
+  if (expectedEditVersion !== undefined && edit.version !== parseInt(String(expectedEditVersion), 10)) {
+    res.status(409).json({
+      error: 'Bản sửa đã được Beta Reader cập nhật phiên bản mới. Hãy xem phiên bản mới nhất trước khi duyệt.',
+      code: 'REVIEW_STALE',
+    });
+    return;
+  }
+
+  // 3. expectedRevisionNumber must equal current revision number (cannot review old revision on new edit)
+  if (expectedRevisionNumber !== undefined && currentRevision.revision_number !== parseInt(String(expectedRevisionNumber), 10)) {
+    res.status(409).json({
+      error: 'Bản sửa đã được Beta Reader cập nhật phiên bản mới. Hãy xem phiên bản mới nhất trước khi duyệt.',
+      code: 'REVIEW_STALE',
+    });
+    return;
+  }
+
+  // 4. Target revision is strictly the verified latest revision from database (never trust client input)
+  const targetRevisionNumber = currentRevision.revision_number;
 
   const reviewId = `rev-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const now = new Date().toISOString();
@@ -586,6 +603,21 @@ export const approveChapter = (req: Request, res: Response): void => {
   const chapter = queryOne<any>('SELECT * FROM beta_chapters WHERE book_id = ? AND chapter_index = ?', id, chapterNum);
   if (!chapter) {
     res.status(404).json({ error: 'Không tìm thấy chương' });
+    return;
+  }
+
+  // Check beta reader completion status (must be COMPLETED before admin can approve)
+  const chapterStatus = queryOne<any>(
+    'SELECT status FROM beta_chapter_status WHERE assignment_id = ? AND chapter_index = ?',
+    assignmentId,
+    chapterNum
+  );
+
+  if (!chapterStatus || chapterStatus.status !== 'COMPLETED') {
+    res.status(400).json({
+      error: 'Beta Reader chưa xác nhận hoàn thành chương này. Không thể phê duyệt khi chương chưa đọc xong.',
+      code: 'CHAPTER_NOT_BETA_COMPLETE',
+    });
     return;
   }
 
