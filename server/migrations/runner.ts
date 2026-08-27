@@ -1,17 +1,77 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
-import { db, queryOne, run } from '../db/database.js';
+import { db, queryAll, queryOne, run, transaction } from '../db/database.js';
 
-export const runMigrations = async () => {
-  console.log('[LilyBeta Migration] Running migrations...');
-  const migrationPath = path.join(process.cwd(), 'server', 'migrations', '001_initial_schema.sql');
-  const sql = fs.readFileSync(migrationPath, 'utf8');
+export const runMigrations = async (): Promise<void> => {
+  console.log('[LilyBeta Migration] Initializing versioned migration engine...');
 
-  db.exec(sql);
-  console.log('[LilyBeta Migration] Schema initialized successfully.');
+  // 1. Ensure schema_migrations table exists
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      version TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    );
+  `);
 
-  // Check Admin Seed Security
+  // 2. Discover migration files from server/migrations/versions
+  const versionsDir = path.join(process.cwd(), 'server', 'migrations', 'versions');
+  if (!fs.existsSync(versionsDir)) {
+    fs.mkdirSync(versionsDir, { recursive: true });
+  }
+
+  const files = fs.readdirSync(versionsDir)
+    .filter(f => f.endsWith('.sql'))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+
+  const appliedRows = queryAll<{ version: string }>('SELECT version FROM schema_migrations');
+  const appliedVersions = new Set(appliedRows.map(r => r.version));
+
+  let appliedCount = 0;
+
+  for (const file of files) {
+    const match = file.match(/^(\d+)_(.+)\.sql$/);
+    if (!match) continue;
+
+    const version = match[1];
+    const name = match[2];
+
+    if (appliedVersions.has(version)) {
+      continue;
+    }
+
+    const filePath = path.join(versionsDir, file);
+    const sql = fs.readFileSync(filePath, 'utf8');
+
+    console.log(`[LilyBeta Migration] Applying version ${version}: ${file}...`);
+
+    transaction(() => {
+      // Execute the migration script
+      db.exec(sql);
+
+      // Record in schema_migrations
+      const now = new Date().toISOString();
+      run(
+        'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)',
+        version,
+        file,
+        now
+      );
+    });
+
+    console.log(`[LilyBeta Migration] ✓ Applied ${file} successfully.`);
+    appliedCount++;
+  }
+
+  if (appliedCount === 0) {
+    console.log('[LilyBeta Migration] Schema is already up to date (no pending migrations).');
+  } else {
+    console.log(`[LilyBeta Migration] Successfully applied ${appliedCount} migration(s).`);
+  }
+
+  // 3. Admin Account Seeding Security
   const isProduction = process.env.NODE_ENV === 'production';
   const allowBootstrap = process.env.BOOTSTRAP_ADMIN === 'true';
 

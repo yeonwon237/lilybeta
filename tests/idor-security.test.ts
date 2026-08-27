@@ -386,8 +386,20 @@ const runTests = async () => {
     });
     assert(blockedTokenARes.status === 401, 'Disabled user request immediately blocked with 401 Unauthorized');
 
-    // 15. Supabase Schema Migration Dependency Verification
-    console.log('\n[Phase 15] Supabase Migration Order & Dependency Verification');
+    // 15. Versioned Migration Engine & Table-to-View Verification
+    console.log('\n[Phase 15] Versioned Migration Engine & Schema Integrity');
+    const appliedVersions = queryOne<any>(
+      "SELECT COUNT(*) AS count FROM schema_migrations WHERE version IN ('001', '002', '003')"
+    );
+    assert(appliedVersions && appliedVersions.count === 3, 'schema_migrations tracked all 3 versions (001, 002, 003)');
+
+    const viewCheck = queryOne<any>(
+      "SELECT type FROM sqlite_master WHERE name = 'beta_chapter_progress'"
+    );
+    assert(viewCheck && viewCheck.type === 'view', 'beta_chapter_progress is confirmed to be a SQL VIEW');
+
+    // 16. Supabase Schema Migration Dependency & Edit/Review RLS Verification
+    console.log('\n[Phase 16] Supabase Migration Order & Edit/Review RLS Verification');
     const supabaseSql = fs.readFileSync(path.join(process.cwd(), 'server', 'migrations', 'supabase_schema.sql'), 'utf8');
     const tableIndex = supabaseSql.indexOf('CREATE TABLE IF NOT EXISTS public.beta_assignments');
     const bookPolicyIndex = supabaseSql.indexOf('CREATE POLICY "Beta Readers view only actively assigned books"');
@@ -398,8 +410,25 @@ const runTests = async () => {
     assert(tableIndex < bookPolicyIndex, 'beta_assignments table created BEFORE beta_books RLS policy');
     assert(tableIndex < progressPolicyIndex, 'beta_assignments table created BEFORE progress RLS policy');
 
+    // Edits, Notes, Revisions RLS checks
+    const editsTableIndex = supabaseSql.indexOf('CREATE TABLE IF NOT EXISTS public.beta_edits');
+    const editsPolicyIndex = supabaseSql.indexOf('CREATE POLICY "Beta Readers propose edits on assigned chapters"');
+    const notesTableIndex = supabaseSql.indexOf('CREATE TABLE IF NOT EXISTS public.beta_notes');
+    const notesPolicyIndex = supabaseSql.indexOf('CREATE POLICY "Beta Readers insert notes on assigned chapters"');
+    const revisionsTableIndex = supabaseSql.indexOf('CREATE TABLE IF NOT EXISTS public.beta_revisions');
+    const revisionsPolicyIndex = supabaseSql.indexOf('CREATE POLICY "Beta Readers view review decisions on own edits"');
+
+    assert(editsTableIndex !== -1 && editsPolicyIndex !== -1, 'beta_edits table and audited RLS policy defined');
+    assert(editsTableIndex < editsPolicyIndex, 'beta_edits table created BEFORE its RLS policies');
+
+    assert(notesTableIndex !== -1 && notesPolicyIndex !== -1, 'beta_notes table and audited RLS policy defined');
+    assert(notesTableIndex < notesPolicyIndex, 'beta_notes table created BEFORE its RLS policies');
+
+    assert(revisionsTableIndex !== -1 && revisionsPolicyIndex !== -1, 'beta_revisions table and audited RLS policy defined');
+    assert(revisionsTableIndex < revisionsPolicyIndex, 'beta_revisions table created BEFORE its RLS policies');
+
     console.log('\n====================================================');
-    console.log(`🎉 ALL ${passedAssertions} PHASE 2 SECURITY & WORKFLOW ASSERTIONS PASSED!`);
+    console.log(`🎉 ALL ${passedAssertions} SECURITY, WORKFLOW & MIGRATION ASSERTIONS PASSED!`);
     console.log('====================================================\n');
   } finally {
     server.close();
