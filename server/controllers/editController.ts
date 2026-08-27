@@ -1,0 +1,689 @@
+import { Request, Response } from 'express';
+import { queryAll, queryOne, run, transaction } from '../db/database.js';
+
+const VALID_ERROR_TYPES = new Set([
+  'XUNG_HO',
+  'DICH_SAI',
+  'CAU_TOI_NGHIA',
+  'NGU_PHAP',
+  'TYPO',
+  'DAU_CAU',
+  'TEN_RIENG',
+  'VAN_PHONG',
+  'CONSISTENCY',
+  'FORMATTING',
+  'OTHER',
+]);
+
+/**
+ * List all edits for the current chapter and assignment.
+ */
+export const listChapterEdits = (req: Request, res: Response): void => {
+  const { id, index } = req.params; // bookId, chapterIndex
+  const user = req.user!;
+  const chapterNum = parseInt(String(index), 10);
+
+  if (isNaN(chapterNum) || chapterNum < 1) {
+    res.status(400).json({ error: 'Chỉ số chương không hợp lệ' });
+    return;
+  }
+
+  if (user.role === 'ADMIN') {
+    const edits = queryAll<any>(`
+      SELECT 
+        e.*,
+        p.username AS userName,
+        p.display_name AS userDisplayName
+      FROM beta_edits e
+      JOIN profiles p ON p.id = e.beta_user_id
+      WHERE e.book_id = ? AND e.chapter_index = ?
+      ORDER BY e.paragraph_index ASC, e.start_offset ASC
+    `, id, chapterNum);
+
+    res.json({ edits: formatEdits(edits) });
+    return;
+  }
+
+  // Beta Reader: strictly own active assignment
+  const assignment = queryOne<any>(
+    'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
+    id,
+    user.id,
+    'ACTIVE'
+  );
+
+  if (!assignment) {
+    res.status(403).json({ error: 'Bạn không có phân công hoạt động đối với tác phẩm này' });
+    return;
+  }
+
+  const edits = queryAll<any>(`
+    SELECT * FROM beta_edits 
+    WHERE assignment_id = ? AND chapter_index = ? AND status = 'ACTIVE'
+    ORDER BY paragraph_index ASC, start_offset ASC
+  `, assignment.id, chapterNum);
+
+  res.json({ edits: formatEdits(edits) });
+};
+
+/**
+ * Create a new paragraph-anchored edit with Revision 1.
+ */
+export const createEdit = (req: Request, res: Response): void => {
+  const { id, index } = req.params; // bookId, chapterIndex
+  const user = req.user!;
+  const chapterNum = parseInt(String(index), 10);
+
+  const {
+    paragraphIndex,
+    startOffset,
+    endOffset,
+    originalText,
+    proposedText,
+    errorType,
+    reason,
+  } = req.body;
+
+  // 1. Resolve active assignment
+  const assignment = queryOne<any>(
+    'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
+    id,
+    user.id,
+    'ACTIVE'
+  );
+
+  if (!assignment) {
+    res.status(403).json({ error: 'Bạn không có phân công hoạt động đối với tác phẩm này' });
+    return;
+  }
+
+  // 2. Validate chapter existence
+  const chapter = queryOne<any>(
+    'SELECT id, paragraphs FROM beta_chapters WHERE book_id = ? AND chapter_index = ?',
+    id,
+    chapterNum
+  );
+
+  if (!chapter) {
+    res.status(404).json({ error: 'Không tìm thấy chương' });
+    return;
+  }
+
+  let paragraphs: string[] = [];
+  try {
+    paragraphs = JSON.parse(chapter.paragraphs);
+  } catch {
+    paragraphs = [chapter.paragraphs];
+  }
+
+  const pIdx = parseInt(String(paragraphIndex), 10);
+  if (isNaN(pIdx) || pIdx < 0 || pIdx >= paragraphs.length) {
+    res.status(400).json({ error: 'Chỉ số đoạn văn không hợp lệ' });
+    return;
+  }
+
+  const paragraph = paragraphs[pIdx];
+  const start = parseInt(String(startOffset), 10);
+  const end = parseInt(String(endOffset), 10);
+
+  if (isNaN(start) || isNaN(end) || start < 0 || end > paragraph.length || start >= end) {
+    res.status(400).json({ error: 'Khoảng bôi chọn không hợp lệ' });
+    return;
+  }
+
+  // 3. Server-side slice check (prevent anchor stale)
+  const actualSlice = paragraph.slice(start, end);
+  if (actualSlice !== originalText) {
+    res.status(409).json({
+      error: 'Vị trí văn bản gốc không khớp với bản thảo (Anchor mismatch).',
+      code: 'EDIT_ANCHOR_STALE',
+    });
+    return;
+  }
+
+  // 4. Validate non-empty & change
+  const cleanProposed = String(proposedText || '').trim();
+  if (!cleanProposed) {
+    res.status(400).json({ error: 'Nội dung sửa không được để trống' });
+    return;
+  }
+
+  if (cleanProposed === originalText.trim()) {
+    res.status(400).json({ error: 'Nội dung sửa không có thay đổi so với bản gốc' });
+    return;
+  }
+
+  // 5. Validate error type
+  if (!VALID_ERROR_TYPES.has(errorType)) {
+    res.status(400).json({ error: 'Loại lỗi không hợp lệ' });
+    return;
+  }
+
+  // 6. Overlap collision check with active edits
+  const existingEdits = queryAll<any>(
+    `SELECT id, start_offset AS startOffset, end_offset AS endOffset
+     FROM beta_edits 
+     WHERE assignment_id = ? AND chapter_index = ? AND paragraph_index = ? AND status = 'ACTIVE'`,
+    assignment.id,
+    chapterNum,
+    pIdx
+  );
+
+  for (const ex of existingEdits) {
+    if (Math.max(start, ex.startOffset) < Math.min(end, ex.endOffset)) {
+      res.status(409).json({
+        error: 'Đoạn bạn chọn đang giao với một chỉnh sửa khác. Hãy sửa chỉnh sửa hiện có hoặc chọn vùng khác.',
+        code: 'EDIT_OVERLAP',
+      });
+      return;
+    }
+  }
+
+  // 7. Context anchoring
+  const prefixContext = paragraph.slice(Math.max(0, start - 35), start);
+  const suffixContext = paragraph.slice(end, Math.min(paragraph.length, end + 35));
+  const editId = `edit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const revId = `rev-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const now = new Date().toISOString();
+
+  transaction(() => {
+    // Insert edit row
+    run(
+      `INSERT INTO beta_edits (
+        id, assignment_id, book_id, chapter_id, chapter_index, beta_user_id,
+        paragraph_index, start_offset, end_offset, original_text, current_text,
+        prefix_context, suffix_context, error_type, reason, status, version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', 1, ?, ?)`,
+      editId,
+      assignment.id,
+      id,
+      chapter.id,
+      chapterNum,
+      user.id,
+      pIdx,
+      start,
+      end,
+      originalText,
+      cleanProposed,
+      prefixContext,
+      suffixContext,
+      errorType,
+      reason ? String(reason).trim() : null,
+      now,
+      now
+    );
+
+    // Insert Revision 1
+    run(
+      `INSERT INTO beta_edit_revisions (
+        id, edit_id, revision_number, before_text, after_text,
+        error_type_before, error_type_after, reason_before, reason_after, changed_by, created_at
+      ) VALUES (?, ?, 1, ?, ?, NULL, ?, NULL, ?, ?, ?)`,
+      revId,
+      editId,
+      originalText,
+      cleanProposed,
+      errorType,
+      reason ? String(reason).trim() : null,
+      user.id,
+      now
+    );
+
+    // If chapter was COMPLETED, transition back to IN_PROGRESS!
+    const chapterStatus = queryOne<any>(
+      'SELECT status FROM beta_chapter_status WHERE assignment_id = ? AND chapter_index = ?',
+      assignment.id,
+      chapterNum
+    );
+
+    if (chapterStatus && chapterStatus.status === 'COMPLETED') {
+      run(
+        `UPDATE beta_chapter_status SET status = 'IN_PROGRESS', updated_at = ? WHERE assignment_id = ? AND chapter_index = ?`,
+        now,
+        assignment.id,
+        chapterNum
+      );
+
+      // Recompute completed chapters count
+      const countRes = queryOne<any>(
+        `SELECT COUNT(id) AS count FROM beta_chapter_status WHERE assignment_id = ? AND status = 'COMPLETED'`,
+        assignment.id
+      );
+      const completedCount = countRes?.count || 0;
+      const totalBook = queryOne<any>('SELECT total_chapters FROM beta_books WHERE id = ?', id);
+      const totalChapters = totalBook?.total_chapters || 1;
+      const overallPercent = Math.min(100, Math.round((completedCount / totalChapters) * 1000) / 10);
+
+      run(
+        `UPDATE beta_assignment_progress 
+         SET completed_chapters_count = ?, overall_percentage = ?, updated_at = ?
+         WHERE assignment_id = ?`,
+        completedCount,
+        overallPercent,
+        now,
+        assignment.id
+      );
+    }
+
+    // Log activity
+    const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    run(
+      'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      logId,
+      user.id,
+      'EDIT_CREATED',
+      id,
+      chapter.id,
+      JSON.stringify({ editId, chapterIndex: chapterNum, errorType }),
+      now
+    );
+  });
+
+  const created = queryOne<any>('SELECT * FROM beta_edits WHERE id = ?', editId);
+  res.status(201).json({ edit: formatEdit(created) });
+};
+
+/**
+ * Update an existing edit (creates next revision).
+ */
+export const updateEdit = (req: Request, res: Response): void => {
+  const { id, index, editId } = req.params;
+  const user = req.user!;
+  const chapterNum = parseInt(String(index), 10);
+
+  const { proposedText, errorType, reason, expectedVersion } = req.body;
+
+  const assignment = queryOne<any>(
+    'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
+    id,
+    user.id,
+    'ACTIVE'
+  );
+
+  if (!assignment) {
+    res.status(403).json({ error: 'Bạn không có quyền chỉnh sửa tác phẩm này' });
+    return;
+  }
+
+  const edit = queryOne<any>(
+    'SELECT * FROM beta_edits WHERE id = ? AND assignment_id = ? AND beta_user_id = ?',
+    editId,
+    assignment.id,
+    user.id
+  );
+
+  if (!edit) {
+    res.status(404).json({ error: 'Không tìm thấy bản sửa' });
+    return;
+  }
+
+  if (edit.status !== 'ACTIVE') {
+    res.status(400).json({ error: 'Bản sửa này đã bị xóa hoặc không còn hiệu lực' });
+    return;
+  }
+
+  // Optimistic concurrency check
+  if (expectedVersion !== undefined && edit.version !== parseInt(String(expectedVersion), 10)) {
+    res.status(409).json({
+      error: 'Bản sửa đã được cập nhật bởi một phiên làm việc khác.',
+      code: 'EDIT_CONFLICT',
+    });
+    return;
+  }
+
+  const cleanProposed = String(proposedText || '').trim();
+  if (!cleanProposed) {
+    res.status(400).json({ error: 'Nội dung sửa không được để trống' });
+    return;
+  }
+
+  if (!VALID_ERROR_TYPES.has(errorType)) {
+    res.status(400).json({ error: 'Loại lỗi không hợp lệ' });
+    return;
+  }
+
+  const nextVersion = edit.version + 1;
+  const revId = `rev-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const now = new Date().toISOString();
+
+  transaction(() => {
+    // 1. Insert new revision
+    run(
+      `INSERT INTO beta_edit_revisions (
+        id, edit_id, revision_number, before_text, after_text,
+        error_type_before, error_type_after, reason_before, reason_after, changed_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      revId,
+      editId,
+      nextVersion,
+      edit.current_text,
+      cleanProposed,
+      edit.error_type,
+      errorType,
+      edit.reason,
+      reason ? String(reason).trim() : null,
+      user.id,
+      now
+    );
+
+    // 2. Update beta_edits
+    run(
+      `UPDATE beta_edits SET
+        current_text = ?,
+        error_type = ?,
+        reason = ?,
+        version = ?,
+        updated_at = ?
+       WHERE id = ?`,
+      cleanProposed,
+      errorType,
+      reason ? String(reason).trim() : null,
+      nextVersion,
+      now,
+      editId
+    );
+
+    // 3. If chapter was COMPLETED, transition back to IN_PROGRESS
+    const chapterStatus = queryOne<any>(
+      'SELECT status FROM beta_chapter_status WHERE assignment_id = ? AND chapter_index = ?',
+      assignment.id,
+      chapterNum
+    );
+
+    if (chapterStatus && chapterStatus.status === 'COMPLETED') {
+      run(
+        `UPDATE beta_chapter_status SET status = 'IN_PROGRESS', updated_at = ? WHERE assignment_id = ? AND chapter_index = ?`,
+        now,
+        assignment.id,
+        chapterNum
+      );
+    }
+  });
+
+  const updated = queryOne<any>('SELECT * FROM beta_edits WHERE id = ?', editId);
+  res.json({ success: true, edit: formatEdit(updated) });
+};
+
+/**
+ * Soft-delete / revert an edit.
+ */
+export const deleteEdit = (req: Request, res: Response): void => {
+  const { id, editId } = req.params;
+  const user = req.user!;
+
+  const assignment = queryOne<any>(
+    'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
+    id,
+    user.id,
+    'ACTIVE'
+  );
+
+  if (!assignment) {
+    res.status(403).json({ error: 'Bạn không có quyền thực hiện thao tác này' });
+    return;
+  }
+
+  const edit = queryOne<any>(
+    'SELECT * FROM beta_edits WHERE id = ? AND assignment_id = ? AND beta_user_id = ?',
+    editId,
+    assignment.id,
+    user.id
+  );
+
+  if (!edit) {
+    res.status(404).json({ error: 'Không tìm thấy bản sửa' });
+    return;
+  }
+
+  const nextVersion = edit.version + 1;
+  const revId = `rev-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const now = new Date().toISOString();
+
+  transaction(() => {
+    // Insert reversion revision
+    run(
+      `INSERT INTO beta_edit_revisions (
+        id, edit_id, revision_number, before_text, after_text,
+        error_type_before, error_type_after, reason_before, reason_after, changed_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Đã hoàn tác chỉnh sửa (Reverted)', ?, ?)`,
+      revId,
+      editId,
+      nextVersion,
+      edit.current_text,
+      edit.original_text,
+      edit.error_type,
+      edit.error_type,
+      edit.reason,
+      user.id,
+      now
+    );
+
+    // Soft delete edit
+    run(
+      `UPDATE beta_edits SET status = 'DELETED', version = ?, updated_at = ? WHERE id = ?`,
+      nextVersion,
+      now,
+      editId
+    );
+  });
+
+  res.json({ success: true, message: 'Đã hoàn tác chỉnh sửa thành công' });
+};
+
+/**
+ * Get all revision steps for an edit.
+ */
+export const getEditRevisions = (req: Request, res: Response): void => {
+  const { editId } = req.params;
+  const user = req.user!;
+
+  const edit = queryOne<any>('SELECT * FROM beta_edits WHERE id = ?', editId);
+  if (!edit) {
+    res.status(404).json({ error: 'Không tìm thấy bản sửa' });
+    return;
+  }
+
+  if (user.role !== 'ADMIN' && edit.beta_user_id !== user.id) {
+    res.status(403).json({ error: 'Bạn không có quyền xem lịch sử sửa đổi này' });
+    return;
+  }
+
+  const revisions = queryAll<any>(`
+    SELECT 
+      r.id,
+      r.edit_id AS editId,
+      r.revision_number AS revisionNumber,
+      r.before_text AS beforeText,
+      r.after_text AS afterText,
+      r.error_type_before AS errorTypeBefore,
+      r.error_type_after AS errorTypeAfter,
+      r.reason_before AS reasonBefore,
+      r.reason_after AS reasonAfter,
+      r.changed_by AS changedBy,
+      r.created_at AS createdAt,
+      p.display_name AS changedByName
+    FROM beta_edit_revisions r
+    JOIN profiles p ON p.id = r.changed_by
+    WHERE r.edit_id = ?
+    ORDER BY r.revision_number ASC
+  `, editId);
+
+  res.json({ revisions });
+};
+
+/**
+ * Notes CRUD
+ */
+export const listChapterNotes = (req: Request, res: Response): void => {
+  const { id, index } = req.params;
+  const user = req.user!;
+  const chapterNum = parseInt(String(index), 10);
+
+  const assignment = queryOne<any>(
+    'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
+    id,
+    user.id,
+    'ACTIVE'
+  );
+
+  if (!assignment && user.role !== 'ADMIN') {
+    res.status(403).json({ error: 'Không có quyền truy cập' });
+    return;
+  }
+
+  const notes = queryAll<any>(`
+    SELECT 
+      id,
+      assignment_id AS assignmentId,
+      book_id AS bookId,
+      chapter_id AS chapterId,
+      chapter_index AS chapterIndex,
+      beta_user_id AS betaUserId,
+      paragraph_index AS paragraphIndex,
+      start_offset AS startOffset,
+      end_offset AS endOffset,
+      selected_text AS selectedText,
+      note,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM beta_notes
+    WHERE book_id = ? AND chapter_index = ? AND beta_user_id = ?
+    ORDER BY paragraph_index ASC, start_offset ASC
+  `, id, chapterNum, user.id);
+
+  res.json({ notes });
+};
+
+export const createNote = (req: Request, res: Response): void => {
+  const { id, index } = req.params;
+  const user = req.user!;
+  const chapterNum = parseInt(String(index), 10);
+  const { paragraphIndex, startOffset, endOffset, selectedText, note } = req.body;
+
+  const assignment = queryOne<any>(
+    'SELECT id FROM beta_assignments WHERE book_id = ? AND beta_user_id = ? AND status = ?',
+    id,
+    user.id,
+    'ACTIVE'
+  );
+
+  if (!assignment) {
+    res.status(403).json({ error: 'Không có quyền ghi chú' });
+    return;
+  }
+
+  const chapter = queryOne<any>('SELECT id FROM beta_chapters WHERE book_id = ? AND chapter_index = ?', id, chapterNum);
+  if (!chapter) {
+    res.status(404).json({ error: 'Chương không tồn tại' });
+    return;
+  }
+
+  const cleanNote = String(note || '').trim();
+  if (!cleanNote) {
+    res.status(400).json({ error: 'Nội dung ghi chú không được để trống' });
+    return;
+  }
+
+  const noteId = `note-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const now = new Date().toISOString();
+
+  run(
+    `INSERT INTO beta_notes (
+      id, assignment_id, book_id, chapter_id, chapter_index, beta_user_id,
+      paragraph_index, start_offset, end_offset, selected_text, note, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    noteId,
+    assignment.id,
+    id,
+    chapter.id,
+    chapterNum,
+    user.id,
+    parseInt(String(paragraphIndex), 10) || 0,
+    parseInt(String(startOffset), 10) || 0,
+    parseInt(String(endOffset), 10) || 0,
+    selectedText || null,
+    cleanNote,
+    now,
+    now
+  );
+
+  res.status(201).json({
+    note: {
+      id: noteId,
+      assignmentId: assignment.id,
+      bookId: id,
+      chapterId: chapter.id,
+      chapterIndex: chapterNum,
+      betaUserId: user.id,
+      paragraphIndex: parseInt(String(paragraphIndex), 10) || 0,
+      startOffset: parseInt(String(startOffset), 10) || 0,
+      endOffset: parseInt(String(endOffset), 10) || 0,
+      selectedText,
+      note: cleanNote,
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+};
+
+export const deleteNote = (req: Request, res: Response): void => {
+  const { noteId } = req.params;
+  const user = req.user!;
+
+  run('DELETE FROM beta_notes WHERE id = ? AND beta_user_id = ?', noteId, user.id);
+  res.json({ success: true, message: 'Đã xóa ghi chú' });
+};
+
+/**
+ * Admin Inspector: List all edits for a book across all Beta Readers and chapters.
+ */
+export const listAdminBookEdits = (req: Request, res: Response): void => {
+  const { id } = req.params; // bookId
+
+  const edits = queryAll<any>(`
+    SELECT 
+      e.*,
+      p.username AS userName,
+      p.display_name AS userDisplayName,
+      (SELECT COUNT(r.id) FROM beta_edit_revisions r WHERE r.edit_id = e.id) AS revisionCount
+    FROM beta_edits e
+    JOIN profiles p ON p.id = e.beta_user_id
+    WHERE e.book_id = ?
+    ORDER BY e.created_at DESC
+  `, id);
+
+  res.json({ edits: formatEdits(edits) });
+};
+
+// Helpers
+function formatEdit(e: any) {
+  if (!e) return null;
+  return {
+    id: e.id,
+    assignmentId: e.assignment_id,
+    bookId: e.book_id,
+    chapterId: e.chapter_id,
+    chapterIndex: e.chapter_index,
+    betaUserId: e.beta_user_id,
+    paragraphIndex: e.paragraph_index,
+    startOffset: e.start_offset,
+    endOffset: e.end_offset,
+    originalText: e.original_text,
+    currentText: e.current_text,
+    prefixContext: e.prefix_context,
+    suffixContext: e.suffix_context,
+    errorType: e.error_type,
+    reason: e.reason,
+    status: e.status,
+    version: e.version,
+    createdAt: e.created_at,
+    updatedAt: e.updated_at,
+    userName: e.userName,
+    userDisplayName: e.userDisplayName,
+    revisionCount: e.revisionCount,
+  };
+}
+
+function formatEdits(list: any[]) {
+  return (list || []).map(formatEdit);
+}

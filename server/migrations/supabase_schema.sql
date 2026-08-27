@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS public.beta_books (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 1.3 Beta Chapters
+-- 1.3 Beta Chapters (Immutable Original Source - Never Overwritten)
 CREATE TABLE IF NOT EXISTS public.beta_chapters (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   book_id UUID NOT NULL REFERENCES public.beta_books(id) ON DELETE CASCADE,
@@ -108,36 +108,71 @@ CREATE TABLE IF NOT EXISTS public.beta_activity_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 1.8 Phase 3 Tables: Edits, Revisions, Notes
+-- 1.8 Beta Edits (Phase 3: Paragraph-anchored proposed edits)
 CREATE TABLE IF NOT EXISTS public.beta_edits (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  assignment_id UUID NOT NULL REFERENCES public.beta_assignments(id) ON DELETE CASCADE,
   book_id UUID NOT NULL REFERENCES public.beta_books(id) ON DELETE CASCADE,
   chapter_id UUID NOT NULL REFERENCES public.beta_chapters(id) ON DELETE CASCADE,
+  chapter_index INTEGER NOT NULL,
   beta_user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   paragraph_index INTEGER NOT NULL,
+  start_offset INTEGER NOT NULL,
+  end_offset INTEGER NOT NULL,
   original_text TEXT NOT NULL,
-  proposed_text TEXT NOT NULL,
-  error_type TEXT DEFAULT 'OTHER' CHECK(error_type IN ('TYPO', 'GRAMMAR', 'TRANSLATION', 'TERMINOLOGY', 'FORMATTING', 'OTHER')),
-  status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'ACCEPTED', 'REJECTED')),
+  current_text TEXT NOT NULL,
+  prefix_context TEXT,
+  suffix_context TEXT,
+  error_type TEXT NOT NULL CHECK(error_type IN (
+    'XUNG_HO', 'DICH_SAI', 'CAU_TOI_NGHIA', 'NGU_PHAP', 'TYPO',
+    'DAU_CAU', 'TEN_RIENG', 'VAN_PHONG', 'CONSISTENCY', 'FORMATTING', 'OTHER'
+  )),
+  reason TEXT,
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE', 'DELETED')),
+  version INTEGER NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS public.beta_revisions (
+-- 1.9 Beta Edit Revisions (Phase 3: Immutable history of every edit version)
+CREATE TABLE IF NOT EXISTS public.beta_edit_revisions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  edit_id UUID NOT NULL REFERENCES public.beta_edits(id) ON DELETE CASCADE,
+  revision_number INTEGER NOT NULL,
+  before_text TEXT NOT NULL,
+  after_text TEXT NOT NULL,
+  error_type_before TEXT,
+  error_type_after TEXT NOT NULL,
+  reason_before TEXT,
+  reason_after TEXT,
+  changed_by UUID NOT NULL REFERENCES public.profiles(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(edit_id, revision_number)
+);
+
+-- 1.10 Beta Edit Reviews (Foundation for Phase 4 Admin Review)
+CREATE TABLE IF NOT EXISTS public.beta_edit_reviews (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   edit_id UUID NOT NULL REFERENCES public.beta_edits(id) ON DELETE CASCADE,
   reviewer_id UUID NOT NULL REFERENCES public.profiles(id),
+  decision TEXT NOT NULL CHECK(decision IN ('ACCEPTED', 'REJECTED', 'CHANGES_REQUESTED')),
   comment TEXT,
-  status TEXT NOT NULL CHECK(status IN ('ACCEPTED', 'REJECTED')),
+  reviewed_revision_number INTEGER NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 1.11 Beta Notes (Phase 3: Private reader annotations)
 CREATE TABLE IF NOT EXISTS public.beta_notes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  assignment_id UUID NOT NULL REFERENCES public.beta_assignments(id) ON DELETE CASCADE,
   book_id UUID NOT NULL REFERENCES public.beta_books(id) ON DELETE CASCADE,
   chapter_id UUID NOT NULL REFERENCES public.beta_chapters(id) ON DELETE CASCADE,
+  chapter_index INTEGER NOT NULL,
   beta_user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   paragraph_index INTEGER NOT NULL,
+  start_offset INTEGER DEFAULT 0,
+  end_offset INTEGER DEFAULT 0,
+  selected_text TEXT,
   note TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -155,10 +190,10 @@ CREATE INDEX IF NOT EXISTS idx_beta_assignments_book_status ON public.beta_assig
 CREATE INDEX IF NOT EXISTS idx_beta_assignment_progress_user ON public.beta_assignment_progress(beta_user_id, book_id);
 CREATE INDEX IF NOT EXISTS idx_beta_chapter_status_assign ON public.beta_chapter_status(assignment_id, chapter_index);
 CREATE INDEX IF NOT EXISTS idx_beta_activity_user ON public.beta_activity_logs(user_id);
-CREATE INDEX IF NOT EXISTS idx_beta_edits_chapter ON public.beta_edits(chapter_id, paragraph_index);
-CREATE INDEX IF NOT EXISTS idx_beta_edits_book_user ON public.beta_edits(book_id, beta_user_id, status);
-CREATE INDEX IF NOT EXISTS idx_beta_revisions_edit ON public.beta_revisions(edit_id);
-CREATE INDEX IF NOT EXISTS idx_beta_notes_chapter ON public.beta_notes(chapter_id, paragraph_index);
+CREATE INDEX IF NOT EXISTS idx_beta_edits_chapter_para ON public.beta_edits(chapter_id, paragraph_index);
+CREATE INDEX IF NOT EXISTS idx_beta_edits_assignment ON public.beta_edits(assignment_id, chapter_index, status);
+CREATE INDEX IF NOT EXISTS idx_beta_edit_revisions_edit ON public.beta_edit_revisions(edit_id, revision_number);
+CREATE INDEX IF NOT EXISTS idx_beta_notes_chapter_para ON public.beta_notes(chapter_id, paragraph_index);
 
 -- =============================================================================
 -- 3. ENABLE ROW LEVEL SECURITY (RLS)
@@ -171,7 +206,8 @@ ALTER TABLE public.beta_assignment_progress ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.beta_chapter_status ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.beta_activity_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.beta_edits ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.beta_revisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.beta_edit_revisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.beta_edit_reviews ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.beta_notes ENABLE ROW LEVEL SECURITY;
 
 -- =============================================================================
@@ -230,7 +266,7 @@ CREATE POLICY "Beta Readers view own assignments"
   ON public.beta_assignments FOR SELECT
   USING (beta_user_id = auth.uid());
 
--- 4.5 Beta Assignment Progress Policies (Strict Active Assignment Validation)
+-- 4.5 Beta Assignment Progress Policies
 CREATE POLICY "Admins full access to beta_assignment_progress"
   ON public.beta_assignment_progress FOR ALL
   USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
@@ -260,7 +296,7 @@ CREATE POLICY "Beta Readers manage progress only on actively assigned books"
     AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
   );
 
--- 4.6 Beta Chapter Status Policies (Strict Chapter & Assignment Integrity)
+-- 4.6 Beta Chapter Status Policies
 CREATE POLICY "Admins full access to beta_chapter_status"
   ON public.beta_chapter_status FOR ALL
   USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
@@ -288,13 +324,6 @@ CREATE POLICY "Beta Readers manage chapter status only for active assignment"
         AND beta_assignments.status = 'ACTIVE'
     )
     AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
-    AND (
-      chapter_id IS NULL OR EXISTS (
-        SELECT 1 FROM public.beta_chapters
-        WHERE beta_chapters.id = public.beta_chapter_status.chapter_id
-          AND beta_chapters.book_id = public.beta_chapter_status.book_id
-      )
-    )
   );
 
 -- 4.7 Beta Activity Logs Policies
@@ -315,10 +344,11 @@ CREATE POLICY "Beta Readers propose edits on assigned chapters"
   ON public.beta_edits FOR INSERT
   WITH CHECK (
     beta_user_id = auth.uid()
-    AND status = 'PENDING'
+    AND status = 'ACTIVE'
     AND EXISTS (
       SELECT 1 FROM public.beta_assignments
-      WHERE beta_assignments.book_id = public.beta_edits.book_id
+      WHERE beta_assignments.id = public.beta_edits.assignment_id
+        AND beta_assignments.book_id = public.beta_edits.book_id
         AND beta_assignments.beta_user_id = auth.uid()
         AND beta_assignments.status = 'ACTIVE'
     )
@@ -336,21 +366,23 @@ CREATE POLICY "Beta Readers view own edits on assigned books"
     beta_user_id = auth.uid()
     AND EXISTS (
       SELECT 1 FROM public.beta_assignments
-      WHERE beta_assignments.book_id = public.beta_edits.book_id
+      WHERE beta_assignments.id = public.beta_edits.assignment_id
+        AND beta_assignments.book_id = public.beta_edits.book_id
         AND beta_assignments.beta_user_id = auth.uid()
         AND beta_assignments.status = 'ACTIVE'
     )
     AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
   );
 
-CREATE POLICY "Beta Readers update own pending edits"
+CREATE POLICY "Beta Readers update own active edits"
   ON public.beta_edits FOR UPDATE
   USING (
     beta_user_id = auth.uid()
-    AND status = 'PENDING'
+    AND status = 'ACTIVE'
     AND EXISTS (
       SELECT 1 FROM public.beta_assignments
-      WHERE beta_assignments.book_id = public.beta_edits.book_id
+      WHERE beta_assignments.id = public.beta_edits.assignment_id
+        AND beta_assignments.book_id = public.beta_edits.book_id
         AND beta_assignments.beta_user_id = auth.uid()
         AND beta_assignments.status = 'ACTIVE'
     )
@@ -358,31 +390,63 @@ CREATE POLICY "Beta Readers update own pending edits"
   )
   WITH CHECK (
     beta_user_id = auth.uid()
-    AND status = 'PENDING'
     AND EXISTS (
       SELECT 1 FROM public.beta_assignments
-      WHERE beta_assignments.book_id = public.beta_edits.book_id
+      WHERE beta_assignments.id = public.beta_edits.assignment_id
+        AND beta_assignments.book_id = public.beta_edits.book_id
         AND beta_assignments.beta_user_id = auth.uid()
         AND beta_assignments.status = 'ACTIVE'
     )
     AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
   );
 
-CREATE POLICY "Beta Readers delete own pending edits"
+CREATE POLICY "Beta Readers soft delete own edits"
   ON public.beta_edits FOR DELETE
   USING (
     beta_user_id = auth.uid()
-    AND status = 'PENDING'
     AND EXISTS (
       SELECT 1 FROM public.beta_assignments
-      WHERE beta_assignments.book_id = public.beta_edits.book_id
+      WHERE beta_assignments.id = public.beta_edits.assignment_id
+        AND beta_assignments.book_id = public.beta_edits.book_id
         AND beta_assignments.beta_user_id = auth.uid()
         AND beta_assignments.status = 'ACTIVE'
     )
     AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
   );
 
--- 4.9 Beta Notes Policies (Audited Paragraph Notes)
+-- 4.9 Beta Edit Revisions Policies
+CREATE POLICY "Admins full access to beta_edit_revisions"
+  ON public.beta_edit_revisions FOR ALL
+  USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
+
+CREATE POLICY "Beta Readers view revisions of own edits"
+  ON public.beta_edit_revisions FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.beta_edits
+      WHERE beta_edits.id = public.beta_edit_revisions.edit_id
+        AND beta_edits.beta_user_id = auth.uid()
+    )
+    AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
+  );
+
+-- 4.10 Beta Edit Reviews Policies (Phase 4 Foundation)
+CREATE POLICY "Admins full access to beta_edit_reviews"
+  ON public.beta_edit_reviews FOR ALL
+  USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
+
+CREATE POLICY "Beta Readers view reviews on own edits"
+  ON public.beta_edit_reviews FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.beta_edits
+      WHERE beta_edits.id = public.beta_edit_reviews.edit_id
+        AND beta_edits.beta_user_id = auth.uid()
+    )
+    AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
+  );
+
+-- 4.11 Beta Notes Policies
 CREATE POLICY "Admins full access to beta_notes"
   ON public.beta_notes FOR ALL
   USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
@@ -393,7 +457,8 @@ CREATE POLICY "Beta Readers insert notes on assigned chapters"
     beta_user_id = auth.uid()
     AND EXISTS (
       SELECT 1 FROM public.beta_assignments
-      WHERE beta_assignments.book_id = public.beta_notes.book_id
+      WHERE beta_assignments.id = public.beta_notes.assignment_id
+        AND beta_assignments.book_id = public.beta_notes.book_id
         AND beta_assignments.beta_user_id = auth.uid()
         AND beta_assignments.status = 'ACTIVE'
     )
@@ -411,7 +476,8 @@ CREATE POLICY "Beta Readers view own notes on assigned books"
     beta_user_id = auth.uid()
     AND EXISTS (
       SELECT 1 FROM public.beta_assignments
-      WHERE beta_assignments.book_id = public.beta_notes.book_id
+      WHERE beta_assignments.id = public.beta_notes.assignment_id
+        AND beta_assignments.book_id = public.beta_notes.book_id
         AND beta_assignments.beta_user_id = auth.uid()
         AND beta_assignments.status = 'ACTIVE'
     )
@@ -424,7 +490,8 @@ CREATE POLICY "Beta Readers update own notes"
     beta_user_id = auth.uid()
     AND EXISTS (
       SELECT 1 FROM public.beta_assignments
-      WHERE beta_assignments.book_id = public.beta_notes.book_id
+      WHERE beta_assignments.id = public.beta_notes.assignment_id
+        AND beta_assignments.book_id = public.beta_notes.book_id
         AND beta_assignments.beta_user_id = auth.uid()
         AND beta_assignments.status = 'ACTIVE'
     )
@@ -434,7 +501,8 @@ CREATE POLICY "Beta Readers update own notes"
     beta_user_id = auth.uid()
     AND EXISTS (
       SELECT 1 FROM public.beta_assignments
-      WHERE beta_assignments.book_id = public.beta_notes.book_id
+      WHERE beta_assignments.id = public.beta_notes.assignment_id
+        AND beta_assignments.book_id = public.beta_notes.book_id
         AND beta_assignments.beta_user_id = auth.uid()
         AND beta_assignments.status = 'ACTIVE'
     )
@@ -447,25 +515,10 @@ CREATE POLICY "Beta Readers delete own notes"
     beta_user_id = auth.uid()
     AND EXISTS (
       SELECT 1 FROM public.beta_assignments
-      WHERE beta_assignments.book_id = public.beta_notes.book_id
+      WHERE beta_assignments.id = public.beta_notes.assignment_id
+        AND beta_assignments.book_id = public.beta_notes.book_id
         AND beta_assignments.beta_user_id = auth.uid()
         AND beta_assignments.status = 'ACTIVE'
-    )
-    AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
-  );
-
--- 4.10 Beta Revisions Policies (Review Workflow)
-CREATE POLICY "Admins full access to beta_revisions"
-  ON public.beta_revisions FOR ALL
-  USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
-
-CREATE POLICY "Beta Readers view review decisions on own edits"
-  ON public.beta_revisions FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.beta_edits
-      WHERE beta_edits.id = public.beta_revisions.edit_id
-        AND beta_edits.beta_user_id = auth.uid()
     )
     AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
   );

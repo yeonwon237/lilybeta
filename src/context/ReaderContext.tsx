@@ -7,8 +7,10 @@ import {
   ReadingPresetId, 
   ChapterWorkflowStatus 
 } from '../types';
+import { BetaEdit, EditRevision, BetaNote, ErrorType } from '../beta-edit/editTypes';
 import { BetaCloudBookSource } from '../book-engine/source/BetaCloudBookSource';
 import { useAuth } from './AuthContext';
+import { SelectionRangeInfo } from '../components/reader/InlineSelectionToolbar';
 
 export const ALL_READER_THEMES: ReaderThemeOption[] = [
   { id: 'theme-paper', name: 'Giấy in', className: 'reader-theme-paper', previewBg: '#F8F5EC', previewText: '#2B2621', description: 'Màu giấy in sách truyền thống' },
@@ -73,6 +75,24 @@ interface ReaderContextType {
   isAutosaving: boolean;
   lastSavedText: string | null;
 
+  // Phase 3: Edits & Notes
+  edits: BetaEdit[];
+  notes: BetaNote[];
+  viewMode: 'working' | 'original';
+  setViewMode: (mode: 'working' | 'original') => void;
+  activeSelectionRange: SelectionRangeInfo | null;
+  setActiveSelectionRange: (range: SelectionRangeInfo | null) => void;
+  isEditSheetOpen: boolean;
+  setIsEditSheetOpen: (open: boolean) => void;
+  isDetailModalOpen: boolean;
+  setIsDetailModalOpen: (open: boolean) => void;
+  isHistoryDrawerOpen: boolean;
+  setIsHistoryDrawerOpen: (open: boolean) => void;
+  isNoteModalOpen: boolean;
+  setIsNoteModalOpen: (open: boolean) => void;
+  selectedEdit: BetaEdit | null;
+  setSelectedEdit: (edit: BetaEdit | null) => void;
+
   // Actions
   initReader: (bookId: string, chapterIndex?: number) => Promise<void>;
   loadChapter: (chapterIndex: number) => Promise<void>;
@@ -88,6 +108,32 @@ interface ReaderContextType {
   setIsThemePanelOpen: (open: boolean) => void;
   setIsTocOpen: (open: boolean) => void;
   setIsConfirmCompleteOpen: (open: boolean) => void;
+
+  // Edit CRUD actions
+  saveNewEdit: (data: {
+    paragraphIndex: number;
+    startOffset: number;
+    endOffset: number;
+    originalText: string;
+    proposedText: string;
+    errorType: ErrorType;
+    reason?: string;
+  }) => Promise<void>;
+  updateExistingEdit: (data: {
+    proposedText: string;
+    errorType: ErrorType;
+    reason?: string;
+    expectedVersion?: number;
+  }) => Promise<void>;
+  revertEdit: (edit: BetaEdit) => Promise<void>;
+  saveNote: (data: {
+    paragraphIndex: number;
+    startOffset: number;
+    endOffset: number;
+    selectedText?: string;
+    note: string;
+  }) => Promise<void>;
+  deleteNote: (noteId: string) => Promise<void>;
 }
 
 const ReaderContext = createContext<ReaderContextType | undefined>(undefined);
@@ -106,12 +152,25 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [isLoadingChapter, setIsLoadingChapter] = useState<boolean>(true);
   const [readerError, setReaderError] = useState<string | null>(null);
 
+  // Phase 3 States
+  const [edits, setEdits] = useState<BetaEdit[]>([]);
+  const [notes, setNotes] = useState<BetaNote[]>([]);
+  const [viewMode, setViewMode] = useState<'working' | 'original'>('working');
+  const [activeSelectionRange, setActiveSelectionRange] = useState<SelectionRangeInfo | null>(null);
+  const [selectedEdit, setSelectedEdit] = useState<BetaEdit | null>(null);
+
   // Floating panels state
   const [isToolbarVisible, setIsToolbarVisible] = useState<boolean>(false);
   const [isAaPanelOpen, setIsAaPanelOpen] = useState<boolean>(false);
   const [isThemePanelOpen, setIsThemePanelOpen] = useState<boolean>(false);
   const [isTocOpen, setIsTocOpen] = useState<boolean>(false);
   const [isConfirmCompleteOpen, setIsConfirmCompleteOpen] = useState<boolean>(false);
+
+  // Phase 3 Modal states
+  const [isEditSheetOpen, setIsEditSheetOpen] = useState<boolean>(false);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
+  const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState<boolean>(false);
+  const [isNoteModalOpen, setIsNoteModalOpen] = useState<boolean>(false);
 
   // Autosave state
   const [isAutosaving, setIsAutosaving] = useState<boolean>(false);
@@ -194,7 +253,12 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setReaderError(null);
 
     try {
-      const ch = await source.getChapter(bookId, chapterIndex);
+      const [ch, chapterEdits, chapterNotes] = await Promise.all([
+        source.getChapter(bookId, chapterIndex),
+        source.getChapterEdits(bookId, chapterIndex),
+        source.getChapterNotes(bookId, chapterIndex),
+      ]);
+
       if (!ch) {
         setReaderError('Không tìm thấy nội dung chương này.');
         return;
@@ -202,6 +266,8 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
       setCurrentChapter(ch);
       setCurrentChapterIndex(chapterIndex);
+      setEdits(chapterEdits);
+      setNotes(chapterNotes);
 
       // Update chapterList isCurrent & isRead
       setChapterList(prev => prev.map(item => ({
@@ -301,7 +367,6 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     try {
       const res = await source.completeChapter(book.id, currentChapterIndex);
 
-      // Update workflowMap
       setWorkflowMap(prev => ({
         ...prev,
         [currentChapterIndex]: {
@@ -310,7 +375,6 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         },
       }));
 
-      // Update chapterList
       setChapterList(prev => prev.map(ch => ch.index === currentChapterIndex ? {
         ...ch,
         status: 'COMPLETED',
@@ -318,7 +382,6 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         isRead: true,
       } : ch));
 
-      // Update book completed count
       setBook(prev => prev ? {
         ...prev,
         completedChaptersCount: res.completedChaptersCount,
@@ -330,6 +393,75 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     } catch (err: any) {
       alert(err?.message || 'Không thể hoàn thành chương.');
     }
+  };
+
+  // =========================================================================
+  // Phase 3: Edit CRUD Operations
+  // =========================================================================
+
+  const saveNewEdit = async (data: {
+    paragraphIndex: number;
+    startOffset: number;
+    endOffset: number;
+    originalText: string;
+    proposedText: string;
+    errorType: ErrorType;
+    reason?: string;
+  }) => {
+    if (!book) return;
+    const newEdit = await source.createEdit(book.id, currentChapterIndex, data);
+    setEdits(prev => [...prev.filter(e => e.id !== newEdit.id), newEdit]);
+
+    // If chapter was completed, mark back to IN_PROGRESS locally
+    setWorkflowMap(prev => ({
+      ...prev,
+      [currentChapterIndex]: { ...prev[currentChapterIndex], status: 'IN_PROGRESS' },
+    }));
+  };
+
+  const updateExistingEdit = async (data: {
+    proposedText: string;
+    errorType: ErrorType;
+    reason?: string;
+    expectedVersion?: number;
+  }) => {
+    if (!book || !selectedEdit) return;
+    const updated = await source.updateEdit(book.id, currentChapterIndex, selectedEdit.id, data);
+    setEdits(prev => prev.map(e => e.id === updated.id ? updated : e));
+    setSelectedEdit(updated);
+
+    // Revert status to IN_PROGRESS if completed
+    setWorkflowMap(prev => ({
+      ...prev,
+      [currentChapterIndex]: { ...prev[currentChapterIndex], status: 'IN_PROGRESS' },
+    }));
+  };
+
+  const revertEdit = async (edit: BetaEdit) => {
+    if (!book) return;
+    await source.deleteEdit(book.id, currentChapterIndex, edit.id);
+    // Remove from active rendered edits list
+    setEdits(prev => prev.filter(e => e.id !== edit.id));
+    setIsDetailModalOpen(false);
+    setSelectedEdit(null);
+  };
+
+  const saveNote = async (data: {
+    paragraphIndex: number;
+    startOffset: number;
+    endOffset: number;
+    selectedText?: string;
+    note: string;
+  }) => {
+    if (!book) return;
+    const newNote = await source.createNote(book.id, currentChapterIndex, data);
+    setNotes(prev => [...prev, newNote]);
+  };
+
+  const deleteNote = async (noteId: string) => {
+    if (!book) return;
+    await source.deleteNote(book.id, currentChapterIndex, noteId);
+    setNotes(prev => prev.filter(n => n.id !== noteId));
   };
 
   return (
@@ -352,6 +484,22 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         isConfirmCompleteOpen,
         isAutosaving,
         lastSavedText,
+        edits,
+        notes,
+        viewMode,
+        setViewMode,
+        activeSelectionRange,
+        setActiveSelectionRange,
+        isEditSheetOpen,
+        setIsEditSheetOpen,
+        isDetailModalOpen,
+        setIsDetailModalOpen,
+        isHistoryDrawerOpen,
+        setIsHistoryDrawerOpen,
+        isNoteModalOpen,
+        setIsNoteModalOpen,
+        selectedEdit,
+        setSelectedEdit,
         initReader,
         loadChapter,
         nextChapter,
@@ -366,6 +514,11 @@ export const ReaderProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setIsThemePanelOpen,
         setIsTocOpen,
         setIsConfirmCompleteOpen,
+        saveNewEdit,
+        updateExistingEdit,
+        revertEdit,
+        saveNote,
+        deleteNote,
       }}
     >
       {children}

@@ -5,6 +5,7 @@ import {
   ParsedBookDraft, 
   StorageEstimateInfo 
 } from '../types';
+import { BetaEdit, EditRevision, BetaNote, ErrorType } from '../../beta-edit/editTypes';
 import { BookSource } from './BookSource';
 import { api } from '../../services/api';
 
@@ -20,8 +21,6 @@ export class BetaCloudBookSource implements BookSource {
 
   /**
    * Get all books accessible to the current user.
-   * For Beta Readers: returns only assigned books.
-   * For Admins: returns all books.
    */
   public async getBooks(): Promise<Book[]> {
     const res = await api.get<{ books: Book[] }>('/books');
@@ -113,6 +112,128 @@ export class BetaCloudBookSource implements BookSource {
     }
   }
 
+  // =========================================================================
+  // Phase 3: Inline Edits & Revisions
+  // =========================================================================
+
+  /**
+   * List all edits for a chapter.
+   */
+  public async getChapterEdits(bookId: string, chapterIndex: number): Promise<BetaEdit[]> {
+    try {
+      const res = await api.get<{ edits: BetaEdit[] }>(`/books/${bookId}/chapters/${chapterIndex}/edits`);
+      return res.edits || [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Propose a new edit on a paragraph.
+   */
+  public async createEdit(
+    bookId: string,
+    chapterIndex: number,
+    payload: {
+      paragraphIndex: number;
+      startOffset: number;
+      endOffset: number;
+      originalText: string;
+      proposedText: string;
+      errorType: ErrorType;
+      reason?: string;
+    }
+  ): Promise<BetaEdit> {
+    const res = await api.post<{ edit: BetaEdit }>(`/books/${bookId}/chapters/${chapterIndex}/edits`, payload);
+    return res.edit;
+  }
+
+  /**
+   * Update an existing edit.
+   */
+  public async updateEdit(
+    bookId: string,
+    chapterIndex: number,
+    editId: string,
+    payload: {
+      proposedText: string;
+      errorType: ErrorType;
+      reason?: string;
+      expectedVersion?: number;
+    }
+  ): Promise<BetaEdit> {
+    const res = await api.patch<{ edit: BetaEdit }>(`/books/${bookId}/chapters/${chapterIndex}/edits/${editId}`, payload);
+    return res.edit;
+  }
+
+  /**
+   * Soft delete / revert an edit.
+   */
+  public async deleteEdit(bookId: string, chapterIndex: number, editId: string): Promise<void> {
+    await api.delete(`/books/${bookId}/chapters/${chapterIndex}/edits/${editId}`);
+  }
+
+  /**
+   * Get revision timeline for an edit.
+   */
+  public async getEditRevisions(bookId: string, chapterIndex: number, editId: string): Promise<EditRevision[]> {
+    const res = await api.get<{ revisions: EditRevision[] }>(`/books/${bookId}/chapters/${chapterIndex}/edits/${editId}/revisions`);
+    return res.revisions || [];
+  }
+
+  // =========================================================================
+  // Phase 3: Paragraph Selection Notes
+  // =========================================================================
+
+  /**
+   * List notes for a chapter.
+   */
+  public async getChapterNotes(bookId: string, chapterIndex: number): Promise<BetaNote[]> {
+    try {
+      const res = await api.get<{ notes: BetaNote[] }>(`/books/${bookId}/chapters/${chapterIndex}/notes`);
+      return res.notes || [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Create a note on a paragraph selection.
+   */
+  public async createNote(
+    bookId: string,
+    chapterIndex: number,
+    payload: {
+      paragraphIndex: number;
+      startOffset: number;
+      endOffset: number;
+      selectedText?: string;
+      note: string;
+    }
+  ): Promise<BetaNote> {
+    const res = await api.post<{ note: BetaNote }>(`/books/${bookId}/chapters/${chapterIndex}/notes`, payload);
+    return res.note;
+  }
+
+  /**
+   * Delete a note.
+   */
+  public async deleteNote(bookId: string, chapterIndex: number, noteId: string): Promise<void> {
+    await api.delete(`/books/${bookId}/chapters/${chapterIndex}/notes/${noteId}`);
+  }
+
+  /**
+   * Admin Inspector: List all edits for a book.
+   */
+  public async getAdminBookEdits(bookId: string): Promise<BetaEdit[]> {
+    const res = await api.get<{ edits: BetaEdit[] }>(`/admin/books/${bookId}/edits`);
+    return res.edits || [];
+  }
+
+  // =========================================================================
+  // Admin Book Management
+  // =========================================================================
+
   /**
    * Admin save parsed book draft to cloud database.
    */
@@ -185,9 +306,6 @@ export class BetaCloudBookSource implements BookSource {
     return books.length;
   }
 
-  /**
-   * Cloud storage info placeholder.
-   */
   public async getStorageEstimate(): Promise<StorageEstimateInfo> {
     return {
       usageMB: 0,

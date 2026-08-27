@@ -1,58 +1,86 @@
 import React, { useEffect, useRef } from 'react';
-import { useReader, ReaderProvider } from '../../context/ReaderContext';
+import { 
+  Loader2, 
+  ChevronLeft, 
+  ChevronRight, 
+  CheckCircle2, 
+  Check, 
+  ShieldAlert,
+  MessageSquare
+} from 'lucide-react';
+import { ReaderProvider, useReader } from '../../context/ReaderContext';
 import { ReaderToolbar } from '../../components/reader/ReaderToolbar';
 import { AaSettingsSheet } from '../../components/reader/AaSettingsSheet';
 import { ThemeSelectorSheet } from '../../components/reader/ThemeSelectorSheet';
 import { TocDrawer } from '../../components/reader/TocDrawer';
 import { ConfirmCompleteModal } from '../../components/reader/ConfirmCompleteModal';
 import { Watermark } from '../../components/reader/Watermark';
-import { 
-  ArrowLeft, 
-  ChevronLeft, 
-  ChevronRight, 
-  CheckCircle2, 
-  Check, 
-  Loader2, 
-  ShieldAlert 
-} from 'lucide-react';
+import { InlineSelectionToolbar } from '../../components/reader/InlineSelectionToolbar';
+import { EditBottomSheet } from '../../components/reader/EditBottomSheet';
+import { EditDetailModal } from '../../components/reader/EditDetailModal';
+import { RevisionHistoryDrawer } from '../../components/reader/RevisionHistoryDrawer';
+import { NoteModal } from '../../components/reader/NoteModal';
+import { applyEditsToParagraph } from '../../beta-edit/applyEdits';
+import { ERROR_TYPE_LABELS } from '../../beta-edit/editTypes';
+import { useAuth } from '../../context/AuthContext';
 
-interface BetaReaderViewContentProps {
+export interface BetaReaderViewProps {
   bookId: string;
   initialChapterIndex: number;
   onBackToBook: () => void;
 }
 
-const BetaReaderViewContent: React.FC<BetaReaderViewContentProps> = ({
+const BetaReaderViewContent: React.FC<BetaReaderViewProps> = ({
   bookId,
   initialChapterIndex,
   onBackToBook,
 }) => {
   const { 
     book,
-    currentChapterIndex,
-    currentChapter,
-    totalChapters,
-    settings,
-    activeTheme,
-    isLoadingChapter,
+    currentChapterIndex, 
+    currentChapter, 
+    totalChapters, 
+    settings, 
+    activeTheme, 
+    isLoadingChapter, 
     readerError,
-    initReader,
+    workflowMap,
     nextChapter,
     prevChapter,
     toggleToolbar,
     triggerAutosave,
     setIsConfirmCompleteOpen,
-    workflowMap,
+    initReader,
+    edits,
+    notes,
+    viewMode,
+    activeSelectionRange,
+    setActiveSelectionRange,
+    isEditSheetOpen,
+    setIsEditSheetOpen,
+    isDetailModalOpen,
+    setIsDetailModalOpen,
+    isHistoryDrawerOpen,
+    setIsHistoryDrawerOpen,
+    isNoteModalOpen,
+    setIsNoteModalOpen,
+    selectedEdit,
+    setSelectedEdit,
+    saveNewEdit,
+    updateExistingEdit,
+    revertEdit,
+    saveNote,
   } = useReader();
 
+  const { user } = useAuth();
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Initialize on mount or when bookId changes
+  // Initialize reader for book and chapter
   useEffect(() => {
     initReader(bookId, initialChapterIndex);
-  }, [bookId]);
+  }, [bookId, initialChapterIndex]);
 
-  // Scroll listener for cloud autosave (debounced 1s inside context)
+  // Autosave scroll tracking
   useEffect(() => {
     const handleScroll = () => {
       const scrollY = window.scrollY;
@@ -68,8 +96,7 @@ const BetaReaderViewContent: React.FC<BetaReaderViewContentProps> = ({
   }, [triggerAutosave]);
 
   // Handle click on reading area to toggle toolbar
-  const handleContentClick = (e: React.MouseEvent) => {
-    // If text was selected, do not toggle toolbar
+  const handleContentClick = () => {
     const selection = window.getSelection();
     if (selection && selection.toString().length > 0) return;
     toggleToolbar();
@@ -79,7 +106,7 @@ const BetaReaderViewContent: React.FC<BetaReaderViewContentProps> = ({
   if (readerError && readerError.includes('quyền')) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-[#FAF8F5]">
-        <div className="max-w-md w-full bg-white rounded-3xl p-8 border border-rose-200 text-center space-y-4 shadow-sm">
+        <div className="max-w-md w-full bg-white rounded-3xl p-8 border border-rose-200 text-center space-y-4 shadow-xs">
           <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
             <ShieldAlert className="w-6 h-6" />
           </div>
@@ -109,6 +136,64 @@ const BetaReaderViewContent: React.FC<BetaReaderViewContentProps> = ({
   const currentWorkflow = workflowMap[currentChapterIndex];
   const isCompleted = currentWorkflow?.status === 'COMPLETED';
 
+  // Render a paragraph according to viewMode (Working vs Original)
+  const renderParagraphContent = (p: string, pIdx: number) => {
+    if (viewMode === 'original') {
+      return p;
+    }
+
+    const paraEdits = edits.filter(e => e.paragraphIndex === pIdx && e.status === 'ACTIVE');
+    const paraNotes = notes.filter(n => n.paragraphIndex === pIdx);
+
+    try {
+      const segments = applyEditsToParagraph(p, paraEdits);
+
+      return (
+        <>
+          {segments.map((seg, sIdx) => {
+            if (!seg.isEdited || !seg.edit) {
+              return <React.Fragment key={sIdx}>{seg.text}</React.Fragment>;
+            }
+
+            const edit = seg.edit;
+            return (
+              <span
+                key={edit.id || sIdx}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedEdit(edit);
+                  setIsDetailModalOpen(true);
+                }}
+                className="cursor-pointer border-b-2 border-purple-500/80 bg-purple-500/10 hover:bg-purple-500/25 px-0.5 rounded transition inline-block font-medium select-text"
+                title={`Đã sửa (${ERROR_TYPE_LABELS[edit.errorType] || edit.errorType}): ${edit.originalText} → ${edit.currentText}`}
+              >
+                {seg.text}
+              </span>
+            );
+          })}
+
+          {/* Paragraph notes badge */}
+          {paraNotes.length > 0 && (
+            <span
+              className="inline-flex items-center gap-0.5 ml-2 px-1.5 py-0.5 rounded-md bg-amber-100/80 text-amber-800 text-[10px] font-sans font-bold align-middle cursor-pointer hover:bg-amber-200 transition"
+              title={`${paraNotes.length} ghi chú trong đoạn này: ${paraNotes.map(n => n.note).join('; ')}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                alert(`Ghi chú đoạn ${pIdx + 1}:\n` + paraNotes.map((n, i) => `${i + 1}. ${n.note}`).join('\n'));
+              }}
+            >
+              <MessageSquare className="w-3 h-3" />
+              <span>{paraNotes.length}</span>
+            </span>
+          )}
+        </>
+      );
+    } catch (err) {
+      console.warn('Error applying edits to paragraph:', err);
+      return p;
+    }
+  };
+
   return (
     <div 
       ref={containerRef}
@@ -127,6 +212,96 @@ const BetaReaderViewContent: React.FC<BetaReaderViewContentProps> = ({
       <ThemeSelectorSheet />
       <TocDrawer />
       <ConfirmCompleteModal />
+
+      {/* Inline Selection Floating Toolbar */}
+      <InlineSelectionToolbar
+        onOpenEdit={(range) => {
+          setActiveSelectionRange(range);
+          setSelectedEdit(null);
+          setIsEditSheetOpen(true);
+        }}
+        onOpenNote={(range) => {
+          setActiveSelectionRange(range);
+          setIsNoteModalOpen(true);
+        }}
+      />
+
+      {/* Edit Bottom Sheet / Modal */}
+      <EditBottomSheet
+        isOpen={isEditSheetOpen}
+        onClose={() => {
+          setIsEditSheetOpen(false);
+          setActiveSelectionRange(null);
+          setSelectedEdit(null);
+        }}
+        selectionRange={activeSelectionRange}
+        existingEdit={selectedEdit}
+        onSaveEdit={async (data) => {
+          if (selectedEdit) {
+            await updateExistingEdit({
+              proposedText: data.proposedText,
+              errorType: data.errorType,
+              reason: data.reason,
+              expectedVersion: data.expectedVersion,
+            });
+          } else {
+            await saveNewEdit(data);
+          }
+        }}
+        userId={user?.id}
+        bookId={book?.id}
+        chapterIndex={currentChapterIndex}
+      />
+
+      {/* Edit Detail View */}
+      <EditDetailModal
+        isOpen={isDetailModalOpen}
+        onClose={() => {
+          setIsDetailModalOpen(false);
+          setSelectedEdit(null);
+        }}
+        edit={selectedEdit}
+        onEditAgain={(edit) => {
+          setIsDetailModalOpen(false);
+          setSelectedEdit(edit);
+          setIsEditSheetOpen(true);
+        }}
+        onViewHistory={(edit) => {
+          setIsDetailModalOpen(false);
+          setSelectedEdit(edit);
+          setIsHistoryDrawerOpen(true);
+        }}
+        onRevertEdit={async (edit) => {
+          if (confirm('Bạn có chắc muốn hoàn tác chỉnh sửa này và đưa về nguyên tác?')) {
+            await revertEdit(edit);
+          }
+        }}
+      />
+
+      {/* Revision History Drawer */}
+      <RevisionHistoryDrawer
+        isOpen={isHistoryDrawerOpen}
+        onClose={() => {
+          setIsHistoryDrawerOpen(false);
+          setSelectedEdit(null);
+        }}
+        edit={selectedEdit}
+        bookId={book?.id || ''}
+        chapterIndex={currentChapterIndex}
+      />
+
+      {/* Selection Note Modal */}
+      <NoteModal
+        isOpen={isNoteModalOpen}
+        onClose={() => {
+          setIsNoteModalOpen(false);
+          setActiveSelectionRange(null);
+        }}
+        selectionRange={activeSelectionRange}
+        onSaveNote={async (data) => {
+          await saveNote(data);
+        }}
+      />
 
       {/* Watermark for Accountability Deterrence */}
       <Watermark />
@@ -175,9 +350,19 @@ const BetaReaderViewContent: React.FC<BetaReaderViewContentProps> = ({
                 {currentChapter.title}
               </h1>
 
-              <p className="text-[11px] opacity-60 font-mono font-sans">
-                {currentChapter.wordCount.toLocaleString('vi-VN')} chữ
-              </p>
+              <div className="flex items-center justify-center gap-3 text-[11px] opacity-60 font-sans">
+                <span className="font-mono">{currentChapter.wordCount.toLocaleString('vi-VN')} chữ</span>
+                {viewMode === 'working' && edits.length > 0 && (
+                  <span className="text-purple-700 dark:text-purple-300 font-semibold">
+                    · Đang hiển thị {edits.length} chỉnh sửa
+                  </span>
+                )}
+                {viewMode === 'original' && (
+                  <span className="text-amber-700 dark:text-amber-300 font-semibold">
+                    · Đang xem bản gốc nguyên tác
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Paragraphs */}
@@ -193,10 +378,12 @@ const BetaReaderViewContent: React.FC<BetaReaderViewContentProps> = ({
                 currentChapter.paragraphs.map((p, idx) => (
                   <p 
                     key={idx} 
+                    data-paragraph-index={idx}
+                    data-original-text={p}
                     className={settings.firstLineIndent ? 'indent-6' : ''}
                     style={{ marginBottom: `${(settings.paragraphSpacing - 1) * 1.5}rem` }}
                   >
-                    {p}
+                    {renderParagraphContent(p, idx)}
                   </p>
                 ))
               ) : (
@@ -218,45 +405,44 @@ const BetaReaderViewContent: React.FC<BetaReaderViewContentProps> = ({
                     <span>Bạn đã hoàn thành beta chương này</span>
                   </div>
                   {currentWorkflow?.completedAt && (
-                    <span className="text-[10px] opacity-75 font-mono">
-                      Ghi nhận lúc: {new Date(currentWorkflow.completedAt).toLocaleString('vi-VN')}
+                    <span className="text-[10px] text-emerald-700 font-mono">
+                      Hoàn thành: {new Date(currentWorkflow.completedAt).toLocaleString('vi-VN')}
                     </span>
                   )}
+                  <p className="text-[11px] text-emerald-800/80 pt-1">
+                    Nếu bạn chỉnh sửa tiếp trong chương này, trạng thái sẽ tự động cập nhật về đang xử lý.
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <p className="text-xs opacity-75">
+                  <p className="text-xs opacity-70">
                     Đã đọc hết nội dung chương {currentChapterIndex}?
                   </p>
                   <button
                     onClick={() => setIsConfirmCompleteOpen(true)}
-                    className="inline-flex items-center gap-2 px-6 py-3 bg-purple-700 hover:bg-purple-800 text-white rounded-2xl text-xs font-semibold shadow-sm transition"
+                    className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-purple-700 hover:bg-purple-800 text-white font-semibold text-xs shadow-md transition transform hover:scale-[1.02] active:scale-[0.98]"
                   >
                     <Check className="w-4 h-4" />
-                    <span>Xác nhận đã beta xong chương {currentChapterIndex}</span>
+                    <span>Đánh dấu đã beta xong chương {currentChapterIndex}</span>
                   </button>
                 </div>
               )}
 
-              {/* Bottom Nav Stepper */}
-              <div className="flex items-center justify-between gap-4 pt-4">
+              {/* Bottom Next/Prev Chapter navigation buttons */}
+              <div className="flex items-center justify-between pt-4 max-w-md mx-auto">
                 <button
                   onClick={prevChapter}
                   disabled={currentChapterIndex <= 1}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-ink-200/60 text-xs font-semibold hover:bg-ink-100/50 disabled:opacity-30 disabled:pointer-events-none transition"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold hover:bg-ink-100/40 disabled:opacity-30 disabled:hover:bg-transparent transition"
                 >
                   <ChevronLeft className="w-4 h-4" />
                   <span>Chương trước</span>
                 </button>
 
-                <span className="text-xs font-mono opacity-60">
-                  {currentChapterIndex} / {totalChapters}
-                </span>
-
                 <button
                   onClick={nextChapter}
                   disabled={currentChapterIndex >= totalChapters}
-                  className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold shadow-xs disabled:opacity-30 disabled:pointer-events-none transition"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold hover:bg-ink-100/40 disabled:opacity-30 disabled:hover:bg-transparent transition"
                 >
                   <span>Chương sau</span>
                   <ChevronRight className="w-4 h-4" />
@@ -270,7 +456,7 @@ const BetaReaderViewContent: React.FC<BetaReaderViewContentProps> = ({
   );
 };
 
-export const BetaReaderView: React.FC<BetaReaderViewContentProps> = (props) => {
+export const BetaReaderView: React.FC<BetaReaderViewProps> = (props) => {
   return (
     <ReaderProvider>
       <BetaReaderViewContent {...props} />

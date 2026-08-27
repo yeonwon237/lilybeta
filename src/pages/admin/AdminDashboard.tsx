@@ -7,6 +7,8 @@ import { BookStatusBadge, FormatBadge, ActiveBadge, RoleBadge } from '../../comp
 import { BookUploadModal } from './BookUploadModal';
 import { AssignModal } from './AssignModal';
 import { CreateReaderModal } from './CreateReaderModal';
+import { BetaEdit, ERROR_TYPE_LABELS } from '../../beta-edit/editTypes';
+import { BetaCloudBookSource } from '../../book-engine/source/BetaCloudBookSource';
 import { 
   BookOpen, 
   Users, 
@@ -20,7 +22,10 @@ import {
   Loader2, 
   RefreshCw,
   Sparkles,
-  ShieldCheck
+  ShieldCheck,
+  Edit3,
+  Clock,
+  X
 } from 'lucide-react';
 
 export const AdminDashboard: React.FC = () => {
@@ -52,6 +57,38 @@ export const AdminDashboard: React.FC = () => {
     bookId: null,
     bookTitle: '',
   });
+
+  const [editsModal, setEditsModal] = useState<{
+    isOpen: boolean;
+    bookId: string;
+    bookTitle: string;
+    edits: BetaEdit[];
+    isLoading: boolean;
+  }>({
+    isOpen: false,
+    bookId: '',
+    bookTitle: '',
+    edits: [],
+    isLoading: false,
+  });
+
+  const handleOpenEditsModal = async (bookId: string, bookTitle: string) => {
+    setEditsModal({
+      isOpen: true,
+      bookId,
+      bookTitle,
+      edits: [],
+      isLoading: true,
+    });
+
+    try {
+      const list = await BetaCloudBookSource.getInstance().getAdminBookEdits(bookId);
+      setEditsModal(prev => ({ ...prev, edits: list, isLoading: false }));
+    } catch (err) {
+      console.error('Failed to load book edits:', err);
+      setEditsModal(prev => ({ ...prev, isLoading: false }));
+    }
+  };
 
   const loadBooks = async () => {
     setIsLoadingBooks(true);
@@ -340,13 +377,23 @@ export const AdminDashboard: React.FC = () => {
                           {b.assignments && b.assignments.length > 0 ? '+ Giao thêm người' : 'Giao truyện'}
                         </button>
 
-                        <button
-                          onClick={() => handleDeleteBook(b.id, b.title)}
-                          className="p-1 text-ink-400 hover:text-rose-600 rounded-md"
-                          title="Xóa truyện"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleOpenEditsModal(b.id, b.title)}
+                            className="px-2.5 py-1 text-[11px] font-semibold bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg transition flex items-center gap-1"
+                            title="Xem tất cả chỉnh sửa của Beta Readers"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            <span>Xem Edits</span>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteBook(b.id, b.title)}
+                            className="p-1 text-ink-400 hover:text-rose-600 rounded-md"
+                            title="Xóa truyện"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -502,6 +549,108 @@ export const AdminDashboard: React.FC = () => {
         onClose={() => setIsCreateReaderOpen(false)}
         onSuccess={() => loadReaders()}
       />
+
+      {/* Admin Edits Inspector Modal */}
+      {editsModal.isOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-150"
+          onClick={() => setEditsModal(prev => ({ ...prev, isOpen: false }))}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-ink-100 p-6 space-y-4 animate-in zoom-in-95 duration-150 text-ink-900 max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-ink-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-purple-50 text-purple-700 flex items-center justify-center">
+                  <Edit3 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-serif font-bold text-base text-ink-950">
+                    Bản chỉnh sửa Beta — {editsModal.bookTitle}
+                  </h3>
+                  <p className="text-xs text-ink-500">
+                    Tổng cộng {editsModal.edits.length} đề xuất sửa từ các Beta Readers
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditsModal(prev => ({ ...prev, isOpen: false }))}
+                className="p-1 rounded-full text-ink-400 hover:text-ink-700 hover:bg-ink-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-3 pr-1 py-1">
+              {editsModal.isLoading ? (
+                <div className="py-16 flex flex-col items-center justify-center gap-2 text-ink-400">
+                  <Loader2 className="w-6 h-6 animate-spin text-purple-700" />
+                  <span className="text-xs">Đang tải danh sách chỉnh sửa...</span>
+                </div>
+              ) : editsModal.edits.length === 0 ? (
+                <div className="text-center py-16 text-xs text-ink-400">
+                  Chưa có chỉnh sửa nào từ các Beta Readers cho tác phẩm này.
+                </div>
+              ) : (
+                editsModal.edits.map((edit) => (
+                  <div key={edit.id} className="p-4 rounded-2xl border border-ink-100 bg-ink-50/40 space-y-2.5 text-xs">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-ink-900">
+                          {edit.userDisplayName || edit.userName || 'Beta Reader'}
+                        </span>
+                        <span className="text-ink-400 font-mono text-[11px]">
+                          Chương {edit.chapterIndex} · Đoạn {edit.paragraphIndex + 1}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                          {ERROR_TYPE_LABELS[edit.errorType] || edit.errorType}
+                        </span>
+                        <span className="text-[10px] text-ink-400 font-mono">
+                          v{edit.version}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-serif">
+                      <div className="p-2.5 rounded-xl bg-rose-50/60 border border-rose-200/60 text-rose-950">
+                        <span className="font-sans text-[10px] font-bold text-rose-700 block mb-0.5">Bản gốc:</span>
+                        - {edit.originalText}
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-emerald-50/60 border border-emerald-200/60 text-emerald-950 font-medium">
+                        <span className="font-sans text-[10px] font-bold text-emerald-700 block mb-0.5">Đã sửa:</span>
+                        + {edit.currentText}
+                      </div>
+                    </div>
+
+                    {edit.reason && (
+                      <p className="text-[11px] text-ink-600 italic">
+                        Lý do: {edit.reason}
+                      </p>
+                    )}
+
+                    <div className="flex items-center justify-between text-[10px] text-ink-400 pt-1 border-t border-ink-100/60">
+                      <span>Trạng thái: <strong className={edit.status === 'ACTIVE' ? 'text-emerald-600' : 'text-rose-600'}>{edit.status}</strong></span>
+                      <span>{new Date(edit.updatedAt).toLocaleString('vi-VN')}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="pt-2 border-t border-ink-100 flex justify-end">
+              <button
+                onClick={() => setEditsModal(prev => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-ink-100 hover:bg-ink-200 text-ink-700 transition"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

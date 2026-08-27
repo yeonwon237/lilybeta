@@ -415,8 +415,8 @@ const runTests = async () => {
     const editsPolicyIndex = supabaseSql.indexOf('CREATE POLICY "Beta Readers propose edits on assigned chapters"');
     const notesTableIndex = supabaseSql.indexOf('CREATE TABLE IF NOT EXISTS public.beta_notes');
     const notesPolicyIndex = supabaseSql.indexOf('CREATE POLICY "Beta Readers insert notes on assigned chapters"');
-    const revisionsTableIndex = supabaseSql.indexOf('CREATE TABLE IF NOT EXISTS public.beta_revisions');
-    const revisionsPolicyIndex = supabaseSql.indexOf('CREATE POLICY "Beta Readers view review decisions on own edits"');
+    const revisionsTableIndex = supabaseSql.indexOf('CREATE TABLE IF NOT EXISTS public.beta_edit_revisions');
+    const revisionsPolicyIndex = supabaseSql.indexOf('CREATE POLICY "Beta Readers view revisions of own edits"');
 
     assert(editsTableIndex !== -1 && editsPolicyIndex !== -1, 'beta_edits table and audited RLS policy defined');
     assert(editsTableIndex < editsPolicyIndex, 'beta_edits table created BEFORE its RLS policies');
@@ -424,11 +424,283 @@ const runTests = async () => {
     assert(notesTableIndex !== -1 && notesPolicyIndex !== -1, 'beta_notes table and audited RLS policy defined');
     assert(notesTableIndex < notesPolicyIndex, 'beta_notes table created BEFORE its RLS policies');
 
-    assert(revisionsTableIndex !== -1 && revisionsPolicyIndex !== -1, 'beta_revisions table and audited RLS policy defined');
-    assert(revisionsTableIndex < revisionsPolicyIndex, 'beta_revisions table created BEFORE its RLS policies');
+    assert(revisionsTableIndex !== -1 && revisionsPolicyIndex !== -1, 'beta_edit_revisions table and audited RLS policy defined');
+    assert(revisionsTableIndex < revisionsPolicyIndex, 'beta_edit_revisions table created BEFORE its RLS policies');
+
+    // 17. Phase 3: Inline Edits & Multi-Revision Security & Anchoring
+    console.log('\n[Phase 17] Inline Edits, Anchoring, Overlap & Multi-Revision Lifecycle');
+    
+    // Re-enable User A
+    const enableARes = await fetch(`${baseUrl}/api/admin/beta-readers/${userA.id}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ isActive: true }),
+    });
+    assert(enableARes.status === 200, 'Re-enabled Beta Reader A');
+
+    // Fetch chapter 1 to get real paragraph texts
+    const ch1EditRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    const ch1EditData = await ch1EditRes.json();
+    const p0 = ch1EditData.chapter.paragraphs[0]; // e.g. "Đoạn 1 của chương 1..."
+    const targetSlice = p0.slice(0, 6); // "Đoạn 1"
+
+    // Beta A creates valid edit on Book A Chapter 1 Paragraph 0
+    const validEditRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({
+        paragraphIndex: 0,
+        startOffset: 0,
+        endOffset: 6,
+        originalText: targetSlice,
+        proposedText: 'Phần mở đầu',
+        errorType: 'VAN_PHONG',
+        reason: 'Dùng từ trang trọng hơn',
+      }),
+    });
+    const resBody = await validEditRes.text();
+    if (validEditRes.status !== 201) {
+      console.log('validEditRes error body:', validEditRes.status, resBody);
+    }
+    assert(validEditRes.status === 201, 'Beta Reader A creates edit returns 201 Created');
+    const edit1 = JSON.parse(resBody).edit;
+    assert(edit1.version === 1, 'Initial edit version is 1');
+    assert(edit1.status === 'ACTIVE', 'Initial edit status is ACTIVE');
+
+    // IDOR: Beta A tries to create edit on unassigned Book B
+    const crossBookEditRes = await fetch(`${baseUrl}/api/books/${bookB.id}/chapters/1/edits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({
+        paragraphIndex: 0,
+        startOffset: 0,
+        endOffset: 6,
+        originalText: targetSlice,
+        proposedText: 'Hacked',
+        errorType: 'OTHER',
+      }),
+    });
+    assert(crossBookEditRes.status === 403, 'Cross-book edit creation blocked with 403 Forbidden');
+
+    // Fake paragraph index
+    const fakeParaRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({
+        paragraphIndex: 99999,
+        startOffset: 0,
+        endOffset: 5,
+        originalText: 'abc',
+        proposedText: 'xyz',
+        errorType: 'TYPO',
+      }),
+    });
+    assert(fakeParaRes.status === 400, 'Invalid paragraphIndex 99999 rejected with 400 Bad Request');
+
+    // Fake offsets
+    const fakeOffsetRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({
+        paragraphIndex: 0,
+        startOffset: 10,
+        endOffset: 5,
+        originalText: 'abc',
+        proposedText: 'xyz',
+        errorType: 'TYPO',
+      }),
+    });
+    assert(fakeOffsetRes.status === 400, 'Invalid offsets start >= end rejected with 400 Bad Request');
+
+    // Fake original text (Anchor stale mismatch)
+    const anchorMismatchRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({
+        paragraphIndex: 0,
+        startOffset: 0,
+        endOffset: 8,
+        originalText: 'KHONG_KHOP',
+        proposedText: 'Hồi ức',
+        errorType: 'VAN_PHONG',
+      }),
+    });
+    assert(anchorMismatchRes.status === 409, 'Anchor slice mismatch rejected with 409 Conflict (EDIT_ANCHOR_STALE)');
+
+    // Overlapping edit rejection
+    const overlapRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({
+        paragraphIndex: 0,
+        startOffset: 2,
+        endOffset: 8,
+        originalText: p0.slice(2, 8),
+        proposedText: 'văn bản cổ',
+        errorType: 'TYPO',
+      }),
+    });
+    assert(overlapRes.status === 409, 'Overlapping edit range [2, 8) on [0, 6) rejected with 409 Conflict (EDIT_OVERLAP)');
+
+    // Cross-reader IDOR: Beta B attempts to access/mutate Beta A edit
+    const crossReaderGetRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits`, {
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    assert(crossReaderGetRes.status === 403, 'Beta B querying Book A edits blocked with 403 Forbidden');
+
+    const crossReaderPatchRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits/${edit1.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenB}` },
+      body: JSON.stringify({
+        proposedText: 'Hacked',
+        errorType: 'OTHER',
+      }),
+    });
+    assert(crossReaderPatchRes.status === 403, 'Beta B updating Beta A edit blocked with 403 Forbidden');
+
+    const crossReaderDeleteRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits/${edit1.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    assert(crossReaderDeleteRes.status === 403, 'Beta B deleting Beta A edit blocked with 403 Forbidden');
+
+    // Update edit -> Revision 2 creation
+    const updateEditRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits/${edit1.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({
+        proposedText: 'Ký ức',
+        errorType: 'VAN_PHONG',
+        reason: 'Thay đổi lần 2',
+        expectedVersion: 1,
+      }),
+    });
+    assert(updateEditRes.status === 200, 'Beta Reader A updates edit returns 200 OK');
+    const updatedEdit = (await updateEditRes.json()).edit;
+    assert(updatedEdit.version === 2, 'Edit version incremented to 2');
+    assert(updatedEdit.currentText === 'Ký ức', 'Current text updated to Ký ức');
+
+    // Concurrency conflict check
+    const staleConflictRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits/${edit1.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({
+        proposedText: 'Ghi nhớ',
+        errorType: 'VAN_PHONG',
+        expectedVersion: 1, // Stale!
+      }),
+    });
+    assert(staleConflictRes.status === 409, 'Stale expectedVersion=1 rejected with 409 Conflict (EDIT_CONFLICT)');
+
+    // Query revisions timeline
+    const revsRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits/${edit1.id}/revisions`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert(revsRes.status === 200, 'Beta Reader A queries edit revisions returns 200 OK');
+    const revisions = (await revsRes.json()).revisions;
+    assert(revisions.length === 2, 'Revision history contains exactly 2 revisions');
+    assert(revisions[0].revisionNumber === 1 && revisions[0].afterText === 'Phần mở đầu', 'Revision 1 preserved');
+    assert(revisions[1].revisionNumber === 2 && revisions[1].afterText === 'Ký ức', 'Revision 2 preserved');
+
+    // Soft delete / revert edit
+    const deleteEditRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits/${edit1.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert(deleteEditRes.status === 200, 'Soft delete edit returns 200 OK');
+
+    const editsAfterDelRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    const activeEdits = (await editsAfterDelRes.json()).edits;
+    assert(activeEdits.length === 0, 'Deleted edit excluded from active edits list (reverted to original)');
+
+    // Check revision history still intact after soft delete
+    const revsAfterDelRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits/${edit1.id}/revisions`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    const revsAfterDel = (await revsAfterDelRes.json()).revisions;
+    assert(revsAfterDel.length === 3, 'Revision history preserved all 3 steps including reversion');
+
+    // 18. Chapter Completion State Invalidation & Paragraph Notes
+    console.log('\n[Phase 18] Chapter Completion State Invalidation & Paragraph Notes');
+
+    // Re-complete chapter 1
+    const reCompleteRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/complete`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert(reCompleteRes.status === 200, 'Beta Reader A completes Chapter 1');
+
+    const wfCheck1 = await fetch(`${baseUrl}/api/books/${bookA.id}/workflow`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert((await wfCheck1.json()).workflow[1].status === 'COMPLETED', 'Chapter 1 workflow is COMPLETED');
+
+    const p1 = ch1EditData.chapter.paragraphs[1];
+    const targetSlice1 = p1.slice(0, 6); // "Đoạn 2"
+    const editOnCompletedRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/edits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({
+        paragraphIndex: 1,
+        startOffset: 0,
+        endOffset: 6,
+        originalText: targetSlice1,
+        proposedText: 'Phần kết',
+        errorType: 'TYPO',
+      }),
+    });
+    assert(editOnCompletedRes.status === 201, 'Edit created on completed chapter returns 201 Created');
+
+    const wfCheck2 = await fetch(`${baseUrl}/api/books/${bookA.id}/workflow`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert((await wfCheck2.json()).workflow[1].status === 'IN_PROGRESS', 'Editing completed chapter transitions status back to IN_PROGRESS');
+
+    // Paragraph notes CRUD & IDOR
+    const noteRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({
+        paragraphIndex: 0,
+        startOffset: 0,
+        endOffset: 10,
+        selectedText: 'Đoạn văn 1',
+        note: 'Cần kiểm tra lại đại từ nhân vật ở đoạn này',
+      }),
+    });
+    assert(noteRes.status === 201, 'Beta A creates paragraph note returns 201 Created');
+    const note1 = (await noteRes.json()).note;
+
+    const listNotesRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/notes`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert((await listNotesRes.json()).notes.length === 1, 'Beta A lists chapter notes returns 1 note');
+
+    const crossReaderNoteRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/notes`, {
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    assert(crossReaderNoteRes.status === 403, 'Beta B accessing Book A notes blocked with 403 Forbidden');
+
+    const deleteNoteRes = await fetch(`${baseUrl}/api/books/${bookA.id}/chapters/1/notes/${note1.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    assert(deleteNoteRes.status === 200, 'Beta A deletes note returns 200 OK');
+
+    // Admin Book Edits Inspector
+    const adminEditsRes = await fetch(`${baseUrl}/api/admin/books/${bookA.id}/edits`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert(adminEditsRes.status === 200, 'Admin queries book edits inspector returns 200 OK');
+    const allBookEdits = (await adminEditsRes.json()).edits;
+    assert(allBookEdits.length >= 2, 'Admin book inspector retrieves all edits across chapters');
 
     console.log('\n====================================================');
-    console.log(`🎉 ALL ${passedAssertions} SECURITY, WORKFLOW & MIGRATION ASSERTIONS PASSED!`);
+    console.log(`🎉 ALL ${passedAssertions} SECURITY, WORKFLOW, MIGRATION & PHASE 3 EDIT ASSERTIONS PASSED!`);
     console.log('====================================================\n');
   } finally {
     server.close();
