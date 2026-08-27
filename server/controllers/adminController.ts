@@ -16,7 +16,7 @@ export const listBetaReaders = async (_req: Request, res: Response): Promise<voi
     FROM profiles p
     LEFT JOIN beta_assignments ba ON ba.beta_user_id = p.id AND ba.status = 'ACTIVE'
     WHERE p.role = 'BETA_READER'
-    GROUP BY p.id
+    GROUP BY p.id, p.username, p.display_name, p.role, p.is_active, p.created_at
     ORDER BY p.created_at DESC
   `);
 
@@ -477,7 +477,24 @@ export const getActivityLogs = async (req: Request, res: Response): Promise<void
 
   const rows = await queryAll<any>(sql, ...params);
   const hasMore = rows.length > limit;
-  const logs = hasMore ? rows.slice(0, limit) : rows;
+  const rawLogs = hasMore ? rows.slice(0, limit) : rows;
+
+  const logs = rawLogs.map(l => {
+    const createdAtStr = l.createdAt instanceof Date ? l.createdAt.toISOString() : String(l.createdAt || '');
+    let parsedDetails = l.details;
+    if (typeof l.details === 'string') {
+      try {
+        parsedDetails = JSON.parse(l.details);
+      } catch {
+        parsedDetails = l.details;
+      }
+    }
+    return {
+      ...l,
+      createdAt: createdAtStr,
+      details: parsedDetails,
+    };
+  });
 
   const nextCursor = hasMore && logs.length > 0
     ? `${logs[logs.length - 1].createdAt}#${logs[logs.length - 1].id}`

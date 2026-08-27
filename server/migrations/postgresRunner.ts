@@ -51,8 +51,8 @@ export const runPostgresMigrations = async (customAdapter?: PostgresAdapter): Pr
       const sql = fs.readFileSync(filePath, 'utf8');
 
       await adapter.transaction(async (tx) => {
-        // Execute SQL script
-        await tx.run(sql);
+        // Execute SQL script via simple query protocol
+        await tx.exec(sql);
         await tx.run(
           'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)',
           version,

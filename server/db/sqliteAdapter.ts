@@ -1,20 +1,34 @@
-import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import type { DatabaseAdapter, QueryResult } from './DatabaseAdapter.js';
+
+const require = createRequire(import.meta.url);
 
 export class SqliteAdapter implements DatabaseAdapter {
   public readonly provider = 'sqlite' as const;
-  public readonly db: DatabaseSync;
+  public readonly db: any;
 
   constructor(dbPath?: string) {
+    let DatabaseSyncClass: any;
+    try {
+      const sqliteModule = require('node:sqlite');
+      DatabaseSyncClass = sqliteModule.DatabaseSync;
+    } catch {
+      throw new Error(
+        'node:sqlite is not supported in this Node.js runtime. ' +
+        'Node.js 22+ is required for local SQLite mode. ' +
+        'In production/cloud deployments, configure DATABASE_PROVIDER=postgres.'
+      );
+    }
+
     const targetPath = dbPath || process.env.DB_PATH || path.join(process.cwd(), 'data', 'lilybeta.db');
     const dir = path.dirname(targetPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    this.db = new DatabaseSync(targetPath);
+    this.db = new DatabaseSyncClass(targetPath);
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec('PRAGMA foreign_keys = ON;');
   }
@@ -46,6 +60,10 @@ export class SqliteAdapter implements DatabaseAdapter {
       changes: Number(result.changes),
       lastInsertRowid: result.lastInsertRowid,
     };
+  }
+
+  public exec(sql: string): void {
+    this.db.exec(sql);
   }
 
   public transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T> | T): Promise<T> | T {

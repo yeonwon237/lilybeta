@@ -15,6 +15,7 @@ export interface DatabaseAdapter {
   queryAll<T = any>(sql: string, ...params: any[]): Promise<T[]> | T[];
   queryOne<T = any>(sql: string, ...params: any[]): Promise<T | null> | (T | null);
   run(sql: string, ...params: any[]): Promise<QueryResult> | QueryResult;
+  exec(sql: string): Promise<void> | void;
   transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T> | T): Promise<T> | T;
   close(): Promise<void> | void;
   isAlive(): Promise<boolean>;

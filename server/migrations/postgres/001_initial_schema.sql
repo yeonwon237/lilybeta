@@ -7,7 +7,8 @@
 -- 2. Native PostgreSQL data types: JSONB, TIMESTAMPTZ, BOOLEAN, TEXT PRIMARY KEY
 -- 3. High-performance composite indexes
 -- 4. Foreign keys with ON DELETE CASCADE to guarantee zero orphaned records
--- 5. Row-Level Security (RLS) policies for defense-in-depth isolation
+-- 5. Security Authority: Express Backend with Server-Side Authorization Middleware
+--    (Direct database access from frontend is strictly forbidden; credentials kept server-side)
 -- =============================================================================
 
 -- 1. Schema Migrations Table (Version tracking)
