@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api, ApiError } from '../../services/api';
 import { Book, Chapter } from '../../types';
 import { BookCover } from '../../components/common/BookCover';
+import { BrandLogo } from '../../components/common/BrandLogo';
 import { FormatBadge } from '../../components/common/Badges';
 import { ArrowLeft, BookOpen, CheckCircle2, Clock, ShieldAlert, Loader2, Play, Bookmark } from 'lucide-react';
 
@@ -114,7 +115,7 @@ export const BetaBookDetail: React.FC<BetaBookDetailProps> = ({ bookId, onBack, 
             <ArrowLeft className="w-4 h-4" />
             <span>Tủ sách của bạn</span>
           </button>
-          <span className="text-[11px] font-mono text-ink-400">LilyBeta Reading Desk</span>
+          <BrandLogo size="sm" />
         </div>
       </header>
 

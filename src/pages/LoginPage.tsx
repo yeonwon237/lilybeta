@@ -46,16 +46,23 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     <div className="min-h-screen flex flex-col justify-center items-center px-4 py-12 bg-[#FAF8F5]">
       <div className="max-w-md w-full space-y-8">
         {/* Brand Header */}
-        <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-lily-100 text-lily-700 shadow-soft mb-2">
-            <Sparkles className="w-7 h-7" />
+        <div className="text-center space-y-3">
+          <div className="inline-block p-3 rounded-3xl bg-white shadow-soft border border-ink-100/80 mb-1">
+            <img
+              src="/logo-icon.png"
+              alt="LilyHub"
+              className="w-14 h-14 object-contain drop-shadow-sm hover:scale-105 transition-transform"
+            />
           </div>
-          <h1 className="text-3xl font-serif font-bold text-ink-900 tracking-tight">
-            Lily<span className="text-lily-600">Beta</span>
-          </h1>
-          <p className="text-sm text-ink-600">
-            Hệ thống quản lý và đọc duyệt bản thảo cho Beta Reader của LilyHub
-          </p>
+          <div>
+            <h1 className="text-3xl sm:text-4xl font-serif font-bold tracking-tight">
+              <span className="text-[#1E1B4B]">Lily</span>
+              <span className="text-[#9333EA] font-sans font-extrabold">Beta</span>
+            </h1>
+            <p className="text-xs sm:text-sm text-ink-500 max-w-xs mx-auto mt-1 leading-relaxed">
+              Hệ thống đọc duyệt & hiệu đính bản thảo dành riêng cho Beta Reader của LilyHub
+            </p>
+          </div>
         </div>
 
         {/* Login Card */}

@@ -3,6 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import { Book } from '../../types';
 import { BookCover } from '../../components/common/BookCover';
+import { BrandLogo } from '../../components/common/BrandLogo';
 import { FormatBadge } from '../../components/common/Badges';
 import { 
   BookOpen, 
@@ -64,20 +65,11 @@ export const BetaDashboard: React.FC<BetaDashboardProps> = ({ onSelectBook }) =>
       {/* Top Navbar */}
       <header className="bg-white/90 backdrop-blur-md border-b border-ink-100/80 sticky top-0 z-30 shadow-2xs">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-purple-900 text-white flex items-center justify-center font-bold font-serif shadow-xs">
-              LB
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-serif font-bold text-lg text-ink-950 tracking-tight">LilyBeta</span>
-                <span className="text-[10px] uppercase font-mono font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 border border-purple-200">
-                  Beta Reader
-                </span>
-              </div>
-              <p className="text-[11px] text-ink-400">Không gian đọc duyệt & hiệu đính bản thảo</p>
-            </div>
-          </div>
+          <BrandLogo
+            badge="Beta Reader"
+            badgeVariant="reader"
+            subtitle="Không gian đọc duyệt & hiệu đính bản thảo"
+          />
 
           <div className="flex items-center gap-3">
             <div className="hidden sm:flex flex-col text-right">
