@@ -1,7 +1,7 @@
 import { createApp } from './app.js';
 import { runMigrations } from './migrations/runner.js';
 
-const PORT = parseInt(process.env.PORT || '3001', 10);
+const PORT = parseInt(process.env.BACKEND_PORT || process.env.PORT || '3006', 10);
 
 const startServer = async () => {
   try {
