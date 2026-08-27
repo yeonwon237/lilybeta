@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { LoginPage } from './pages/LoginPage';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
+import { AdminReviewWorkspace } from './pages/admin/review/AdminReviewWorkspace';
 import { BetaDashboard } from './pages/beta/BetaDashboard';
 import { BetaBookDetail } from './pages/beta/BetaBookDetail';
 import { BetaReaderView } from './pages/beta/BetaReaderView';
@@ -66,7 +67,27 @@ export const AppContent: React.FC = () => {
     );
   }
 
-  // 2. Admin Routes (/admin)
+  // 2a. Admin Review Workspace: /admin/books/:bookId/review/:chapterIndex?
+  const reviewMatch = currentPath.match(/^\/admin\/books\/([^/]+)\/review(?:\/(\d+))?$/);
+  if (reviewMatch) {
+    const bookId = reviewMatch[1];
+    const chapterIndex = reviewMatch[2] ? parseInt(reviewMatch[2], 10) : 1;
+    return (
+      <ProtectedRoute
+        requiredRole="ADMIN"
+        onRedirectToLogin={() => navigate('/login')}
+        onNavigateHome={() => navigate('/beta')}
+      >
+        <AdminReviewWorkspace
+          bookId={bookId}
+          initialChapterIndex={chapterIndex}
+          onBack={() => navigate('/admin')}
+        />
+      </ProtectedRoute>
+    );
+  }
+
+  // 2b. Admin Dashboard (/admin)
   if (currentPath.startsWith('/admin')) {
     return (
       <ProtectedRoute
@@ -74,7 +95,7 @@ export const AppContent: React.FC = () => {
         onRedirectToLogin={() => navigate('/login')}
         onNavigateHome={() => navigate('/beta')}
       >
-        <AdminDashboard />
+        <AdminDashboard onNavigate={navigate} />
       </ProtectedRoute>
     );
   }

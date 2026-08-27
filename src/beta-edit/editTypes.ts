@@ -61,6 +61,11 @@ export interface BetaEdit {
   updatedAt: string;
   userName?: string;
   userDisplayName?: string;
+  reviewStatus?: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CHANGES_REQUESTED';
+  reviewComment?: string | null;
+  reviewerDisplayName?: string | null;
+  isStaleReview?: boolean;
+  reviewedRevisionNumber?: number | null;
 }
 
 export interface EditRevision {
@@ -90,6 +95,10 @@ export interface BetaNote {
   endOffset: number;
   selectedText?: string;
   note: string;
+  status?: 'OPEN' | 'RESOLVED';
+  resolvedBy?: string | null;
+  resolvedByName?: string | null;
+  resolvedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }

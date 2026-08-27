@@ -265,6 +265,31 @@ export const createEdit = (req: Request, res: Response): void => {
       );
     }
 
+    // Invalidate chapter approval if chapter was APPROVED
+    const chapterReview = queryOne<any>(
+      'SELECT id, status FROM beta_chapter_reviews WHERE assignment_id = ? AND chapter_index = ?',
+      assignment.id,
+      chapterNum
+    );
+    if (chapterReview && chapterReview.status === 'APPROVED') {
+      run(
+        `UPDATE beta_chapter_reviews SET status = 'REOPENED', updated_at = ? WHERE id = ?`,
+        now,
+        chapterReview.id
+      );
+      const logReopenId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      run(
+        'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        logReopenId,
+        user.id,
+        'CHAPTER_REOPENED',
+        id,
+        chapter.id,
+        JSON.stringify({ reason: 'BETA_EDIT_CREATED_POST_APPROVAL', chapterIndex: chapterNum }),
+        now
+      );
+    }
+
     // Log activity
     const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     run(
@@ -396,6 +421,31 @@ export const updateEdit = (req: Request, res: Response): void => {
         now,
         assignment.id,
         chapterNum
+      );
+    }
+
+    // Invalidate chapter approval if chapter was APPROVED
+    const chapterReview = queryOne<any>(
+      'SELECT id, status FROM beta_chapter_reviews WHERE assignment_id = ? AND chapter_index = ?',
+      assignment.id,
+      chapterNum
+    );
+    if (chapterReview && chapterReview.status === 'APPROVED') {
+      run(
+        `UPDATE beta_chapter_reviews SET status = 'REOPENED', updated_at = ? WHERE id = ?`,
+        now,
+        chapterReview.id
+      );
+      const logReopenId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      run(
+        'INSERT INTO beta_activity_logs (id, user_id, action, book_id, chapter_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        logReopenId,
+        user.id,
+        'CHAPTER_REOPENED',
+        id,
+        edit.chapter_id,
+        JSON.stringify({ reason: 'BETA_EDIT_UPDATED_POST_APPROVAL', chapterIndex: chapterNum, editId }),
+        now
       );
     }
   });
@@ -658,6 +708,18 @@ export const listAdminBookEdits = (req: Request, res: Response): void => {
 // Helpers
 function formatEdit(e: any) {
   if (!e) return null;
+
+  const latestReview = queryOne<any>(`
+    SELECT r.decision, r.comment, r.reviewed_revision_number AS reviewedRevisionNumber,
+           p.display_name AS reviewerDisplayName, r.created_at AS reviewCreatedAt
+    FROM beta_edit_reviews r
+    LEFT JOIN profiles p ON p.id = r.reviewer_id
+    WHERE r.edit_id = ?
+    ORDER BY r.created_at DESC LIMIT 1
+  `, e.id);
+
+  const isCurrentReview = latestReview && latestReview.reviewedRevisionNumber === e.version;
+
   return {
     id: e.id,
     assignmentId: e.assignment_id,
@@ -681,6 +743,11 @@ function formatEdit(e: any) {
     userName: e.userName,
     userDisplayName: e.userDisplayName,
     revisionCount: e.revisionCount,
+    reviewStatus: isCurrentReview ? latestReview.decision : 'PENDING',
+    reviewComment: latestReview?.comment || null,
+    reviewerDisplayName: latestReview?.reviewerDisplayName || null,
+    isStaleReview: latestReview ? latestReview.reviewedRevisionNumber !== e.version : false,
+    reviewedRevisionNumber: latestReview?.reviewedRevisionNumber || null,
   };
 }
 

@@ -50,6 +50,45 @@ export const EditDetailModal: React.FC<EditDetailModalProps> = ({
 
         {/* Diff comparison */}
         <div className="space-y-3">
+          {/* Admin Review Status Banner */}
+          {edit.reviewStatus && edit.reviewStatus !== 'PENDING' && (
+            <div
+              className={`p-3 rounded-2xl border text-xs space-y-1 ${
+                edit.reviewStatus === 'ACCEPTED'
+                  ? 'bg-emerald-50/80 border-emerald-200 text-emerald-950'
+                  : edit.reviewStatus === 'CHANGES_REQUESTED'
+                  ? 'bg-amber-50 border-amber-300 text-amber-950'
+                  : 'bg-rose-50 border-rose-200 text-rose-950'
+              }`}
+            >
+              <div className="flex items-center gap-1.5 font-bold">
+                {edit.reviewStatus === 'ACCEPTED' && (
+                  <>
+                    <span className="text-emerald-600">✓</span>
+                    <span>Admin đã chấp nhận đề xuất</span>
+                  </>
+                )}
+                {edit.reviewStatus === 'CHANGES_REQUESTED' && (
+                  <>
+                    <span className="text-amber-600">⚠️</span>
+                    <span>Admin yêu cầu chỉnh sửa lại</span>
+                  </>
+                )}
+                {edit.reviewStatus === 'REJECTED' && (
+                  <>
+                    <span className="text-rose-600">✕</span>
+                    <span>Admin đã từ chối đề xuất</span>
+                  </>
+                )}
+              </div>
+              {edit.reviewComment && (
+                <p className="text-xs italic pl-4 border-l-2 border-current/30">
+                  "{edit.reviewComment}"
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="space-y-1">
             <span className="text-[11px] font-semibold text-rose-700 uppercase tracking-wider">
               Bản gốc:

@@ -15,7 +15,9 @@
     "test:renderer": "tsx tests/working-version-renderer.test.ts",
     "test:migrations": "tsx tests/migrations.test.ts",
     "test:drafts": "tsx tests/draft-store.test.ts",
-    "test": "npm run test:security && npm run test:renderer && npm run test:migrations && npm run test:drafts"
+    "test:approved": "tsx tests/approved-version-renderer.test.ts",
+    "test:review": "tsx tests/admin-review-security.test.ts",
+    "test": "npm run test:security && npm run test:renderer && npm run test:migrations && npm run test:drafts && npm run test:approved && npm run test:review"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

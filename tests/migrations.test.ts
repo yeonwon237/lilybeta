@@ -47,10 +47,11 @@ const runMigrationTests = async () => {
     assert(tableNames.has('beta_edits'), 'beta_edits table created');
     assert(tableNames.has('beta_edit_revisions'), 'beta_edit_revisions table created');
     assert(tableNames.has('beta_edit_reviews'), 'beta_edit_reviews table created');
+    assert(tableNames.has('beta_chapter_reviews'), 'beta_chapter_reviews table created');
     assert(tableNames.has('beta_notes'), 'beta_notes table created');
 
     const versions = freshDb.prepare('SELECT version FROM schema_migrations ORDER BY version ASC').all() as { version: string }[];
-    assert(versions.length >= 4, 'All migrations (001, 002, 003, 004) tracked in schema_migrations');
+    assert(versions.length >= 5, 'All migrations (001, 002, 003, 004, 005) tracked in schema_migrations');
   } finally {
     freshDb.close();
     if (fs.existsSync(tempDbA)) fs.unlinkSync(tempDbA);

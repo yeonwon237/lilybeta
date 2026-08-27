@@ -5,6 +5,7 @@ import * as authController from './controllers/authController.js';
 import * as adminController from './controllers/adminController.js';
 import * as bookController from './controllers/bookController.js';
 import * as editController from './controllers/editController.js';
+import * as reviewController from './controllers/reviewController.js';
 
 export const createApp = () => {
   const app = express();
@@ -36,12 +37,21 @@ export const createApp = () => {
   app.get('/api/admin/logs', requireAuth, requireAdmin, adminController.getActivityLogs);
   app.get('/api/admin/books/:id/edits', requireAuth, requireAdmin, editController.listAdminBookEdits);
 
+  // Phase 4: Admin Review & Chapter Approval routes
+  app.get('/api/admin/books/:id/review', requireAuth, requireAdmin, reviewController.getBookReviewOverview);
+  app.get('/api/admin/books/:id/assignments/:assignmentId/chapters/:index/review', requireAuth, requireAdmin, reviewController.getChapterReviewDetail);
+  app.post('/api/admin/edits/:editId/reviews', requireAuth, requireAdmin, reviewController.createEditReview);
+  app.post('/api/admin/books/:id/assignments/:assignmentId/chapters/:index/approve', requireAuth, requireAdmin, reviewController.approveChapter);
+  app.post('/api/admin/books/:id/assignments/:assignmentId/chapters/:index/reopen', requireAuth, requireAdmin, reviewController.reopenChapter);
+  app.patch('/api/admin/notes/:noteId/resolve', requireAuth, requireAdmin, reviewController.resolveNote);
+
   // Books / Reader routes (Secured against IDOR)
   app.get('/api/books', requireAuth, bookController.listBooks);
   app.get('/api/books/:id', requireAuth, requireBookAccess, bookController.getBook);
   app.get('/api/books/:id/workflow', requireAuth, requireBookAccess, bookController.getChapterWorkflow);
   app.get('/api/books/:id/chapters', requireAuth, requireBookAccess, bookController.getChapterList);
   app.get('/api/books/:id/chapters/:index', requireAuth, requireBookAccess, bookController.getChapter);
+  app.get('/api/books/:id/chapters/:index/approved', requireAuth, requireBookAccess, reviewController.getApprovedChapterVersion);
   app.post('/api/books/:id/chapters/:index/complete', requireAuth, requireBookAccess, bookController.completeChapter);
   app.get('/api/books/:id/progress', requireAuth, requireBookAccess, bookController.getProgress);
   app.post('/api/books/:id/progress', requireAuth, requireBookAccess, bookController.saveProgress);

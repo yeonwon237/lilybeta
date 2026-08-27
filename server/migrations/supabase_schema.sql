@@ -174,8 +174,28 @@ CREATE TABLE IF NOT EXISTS public.beta_notes (
   end_offset INTEGER DEFAULT 0,
   selected_text TEXT,
   note TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'OPEN' CHECK(status IN ('OPEN', 'RESOLVED')),
+  resolved_by UUID REFERENCES public.profiles(id),
+  resolved_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 1.12 Beta Chapter Reviews (Phase 4 Chapter Approval Snapshots)
+CREATE TABLE IF NOT EXISTS public.beta_chapter_reviews (
+  id TEXT PRIMARY KEY,
+  assignment_id UUID NOT NULL REFERENCES public.beta_assignments(id) ON DELETE CASCADE,
+  book_id UUID NOT NULL REFERENCES public.beta_books(id) ON DELETE CASCADE,
+  chapter_id UUID NOT NULL REFERENCES public.beta_chapters(id) ON DELETE CASCADE,
+  chapter_index INTEGER NOT NULL,
+  reviewer_id UUID NOT NULL REFERENCES public.profiles(id),
+  status TEXT NOT NULL CHECK(status IN ('IN_REVIEW', 'APPROVED', 'REOPENED')),
+  approved_at TIMESTAMPTZ,
+  review_snapshot_version INTEGER NOT NULL DEFAULT 1,
+  approved_edits_snapshot TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(assignment_id, chapter_index)
 );
 
 -- =============================================================================
@@ -522,3 +542,22 @@ CREATE POLICY "Beta Readers delete own notes"
     )
     AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
   );
+
+-- 4.12 Beta Chapter Reviews Policies (Phase 4 Approval Workflow)
+ALTER TABLE public.beta_chapter_reviews ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Admins full access to beta_chapter_reviews"
+  ON public.beta_chapter_reviews FOR ALL
+  USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN' AND is_active = TRUE));
+
+CREATE POLICY "Beta Readers view chapter review status of own assignments"
+  ON public.beta_chapter_reviews FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.beta_assignments
+      WHERE beta_assignments.id = public.beta_chapter_reviews.assignment_id
+        AND beta_assignments.beta_user_id = auth.uid()
+    )
+    AND EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_active = TRUE)
+  );
+

@@ -156,6 +156,47 @@ const BetaReaderViewContent: React.FC<BetaReaderViewProps> = ({
             }
 
             const edit = seg.edit;
+            const reviewStatus = edit.reviewStatus || 'PENDING';
+            let styleClass = 'border-b-2 border-purple-500/80 bg-purple-500/10 hover:bg-purple-500/25 text-purple-950';
+            let statusDot = (
+              <span
+                className="inline-block w-1.5 h-1.5 rounded-full bg-purple-500 ml-1 align-middle"
+                title="Đang chờ duyệt"
+              />
+            );
+
+            if (reviewStatus === 'ACCEPTED') {
+              styleClass = 'border-b-2 border-emerald-500/80 bg-emerald-500/10 hover:bg-emerald-500/25 text-emerald-950';
+              statusDot = (
+                <span
+                  className="inline-block text-[10px] text-emerald-600 font-bold ml-1 align-middle"
+                  title="Đã chấp nhận"
+                >
+                  ✓
+                </span>
+              );
+            } else if (reviewStatus === 'CHANGES_REQUESTED') {
+              styleClass = 'border-b-2 border-amber-500 bg-amber-500/15 hover:bg-amber-500/25 text-amber-950';
+              statusDot = (
+                <span
+                  className="inline-block text-[10px] text-amber-600 font-bold ml-1 align-middle"
+                  title="Admin yêu cầu chỉnh lại"
+                >
+                  !
+                </span>
+              );
+            } else if (reviewStatus === 'REJECTED') {
+              styleClass = 'border-b-2 border-rose-400/60 bg-rose-400/10 hover:bg-rose-400/20 text-rose-900 line-through opacity-80';
+              statusDot = (
+                <span
+                  className="inline-block text-[10px] text-rose-500 font-bold ml-1 align-middle"
+                  title="Bị từ chối"
+                >
+                  ×
+                </span>
+              );
+            }
+
             return (
               <span
                 key={edit.id || sIdx}
@@ -164,10 +205,11 @@ const BetaReaderViewContent: React.FC<BetaReaderViewProps> = ({
                   setSelectedEdit(edit);
                   setIsDetailModalOpen(true);
                 }}
-                className="cursor-pointer border-b-2 border-purple-500/80 bg-purple-500/10 hover:bg-purple-500/25 px-0.5 rounded transition inline-block font-medium select-text"
-                title={`Đã sửa (${ERROR_TYPE_LABELS[edit.errorType] || edit.errorType}): ${edit.originalText} → ${edit.currentText}`}
+                className={`cursor-pointer px-0.5 rounded transition inline-block font-medium select-text ${styleClass}`}
+                title={`Đã sửa (${ERROR_TYPE_LABELS[edit.errorType] || edit.errorType}): ${edit.originalText} → ${edit.currentText} [${reviewStatus}]`}
               >
                 {seg.text}
+                {statusDot}
               </span>
             );
           })}
