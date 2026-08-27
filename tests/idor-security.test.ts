@@ -1,9 +1,15 @@
-import { createApp } from '../server/app.js';
-import { runMigrations } from '../server/migrations/runner.js';
-import { queryOne } from '../server/db/database.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+
+// Isolate test database to prevent polluting persistent lilybeta.db
+const testDbFile = path.join(process.cwd(), 'data', `test_idor_${Date.now()}.db`);
+process.env.DB_PATH = testDbFile;
+
+// Dynamic imports so DatabaseSync initializes with testDbFile
+const { createApp } = await import('../server/app.js');
+const { runMigrations } = await import('../server/migrations/runner.js');
+const { queryOne, db } = await import('../server/db/database.js');
 
 const runTests = async () => {
   console.log('====================================================');
@@ -704,6 +710,12 @@ const runTests = async () => {
     console.log('====================================================\n');
   } finally {
     server.close();
+    try {
+      db.close();
+    } catch {}
+    if (fs.existsSync(testDbFile)) fs.unlinkSync(testDbFile);
+    if (fs.existsSync(`${testDbFile}-wal`)) fs.unlinkSync(`${testDbFile}-wal`);
+    if (fs.existsSync(`${testDbFile}-shm`)) fs.unlinkSync(`${testDbFile}-shm`);
   }
 };
 
